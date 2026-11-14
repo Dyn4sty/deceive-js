@@ -134,3 +134,35 @@ export function getRiotClientProcess(): string | null {
   const processes = getRunningProcesses();
   return processes.find((p) => p.toLowerCase().includes('riotclientservices')) ?? null;
 }
+
+/**
+ * Call onExit once the Riot Client has exited and did not relaunch itself within the grace period.
+ * Watching only starts after the client has been seen running.
+ */
+export function watchRiotClientExit(onExit: () => void, graceMs = 3000, pollMs = 2000): () => void {
+  let seenRunning = false;
+  let checking = false;
+
+  const timer = setInterval(() => {
+    if (checking) return;
+    if (getRiotClientProcess()) {
+      seenRunning = true;
+      return;
+    }
+    if (!seenRunning) return;
+
+    checking = true;
+    logger.debug('Detected Riot Client exit, waiting to see if it relaunches');
+    setTimeout(() => {
+      checking = false;
+      if (getRiotClientProcess()) {
+        logger.debug('Riot Client relaunched, continuing to monitor');
+        return;
+      }
+      clearInterval(timer);
+      onExit();
+    }, graceMs);
+  }, pollMs);
+
+  return () => clearInterval(timer);
+}

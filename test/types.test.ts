@@ -9,6 +9,7 @@ describe('Types', () => {
   describe('LaunchGame', () => {
     it('should have correct enum values', () => {
       expect(LaunchGame.LoL).toBe('lol');
+      expect(LaunchGame.TFT).toBe('tft');
       expect(LaunchGame.VALORANT).toBe('valorant');
       expect(LaunchGame.LoR).toBe('lor');
       expect(LaunchGame.Lion).toBe('lion');
@@ -29,6 +30,7 @@ describe('Types', () => {
   describe('PRODUCT_NAMES', () => {
     it('should map games to Riot product names', () => {
       expect(PRODUCT_NAMES[LaunchGame.LoL]).toBe('league_of_legends');
+      expect(PRODUCT_NAMES[LaunchGame.TFT]).toBe('teamfighttactics');
       expect(PRODUCT_NAMES[LaunchGame.VALORANT]).toBe('valorant');
       expect(PRODUCT_NAMES[LaunchGame.LoR]).toBe('bacon');
       expect(PRODUCT_NAMES[LaunchGame.Lion]).toBe('lion');

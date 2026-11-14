@@ -2,18 +2,40 @@
  * Startup handler - orchestrates the application startup sequence
  */
 
-import { LaunchGame, PresenceStatus, PRODUCT_NAMES, ChatServerConfig } from './types.js';
+import {
+  LaunchGame,
+  PresenceStatus,
+  PRODUCT_NAMES,
+  ChatServerConfig,
+  statusLabel,
+} from './types.js';
 import { ConfigProxy } from './proxy/config-proxy.js';
 import { MainController } from './controller.js';
-import { getRiotClientPath, isClientRunning, killProcesses } from './launcher/process-manager.js';
+import {
+  getRiotClientPath,
+  isClientRunning,
+  killProcesses,
+  watchRiotClientExit,
+} from './launcher/process-manager.js';
 import { launchRiotClient } from './launcher/game-launcher.js';
-import { config } from './config/config.js';
+import { config, resolveStartupStatus } from './config/config.js';
+import { loadCertificate, localhostDomainResolves, LOCALHOST_DOMAIN } from './proxy/certificate.js';
 import { logger } from './utils/logger.js';
-import { promptForGame, promptForStatus } from './ui/cli.js';
+import { promptForGame, promptForStatus, confirm, startCommandLoop } from './ui/cli.js';
 import packageJson from '../package.json' with { type: 'json' };
+
+const STATUS_MAP: Record<string, PresenceStatus> = {
+  offline: PresenceStatus.Offline,
+  online: PresenceStatus.Online,
+  mobile: PresenceStatus.Mobile,
+  chat: PresenceStatus.Online,
+};
 
 /**
  * Main entry point for starting Deceive
+ *
+ * @param statusStr Initial status (offline/online/mobile), 'prompt' to ask interactively,
+ *   or null to use the configured startup status
  */
 export async function startDeceive(
   game: LaunchGame,
@@ -23,27 +45,27 @@ export async function startDeceive(
 ): Promise<void> {
   logger.info(`League Deceiver v${packageJson.version}`);
 
-  // Convert status string to enum, or null for interactive prompt
-  let status: PresenceStatus;
-  if (statusStr === null) {
-    // Will prompt later after game selection
-    status = PresenceStatus.Offline; // Temporary, will be overwritten
-  } else {
-    const statusMap: Record<string, PresenceStatus> = {
-      offline: PresenceStatus.Offline,
-      online: PresenceStatus.Online,
-      mobile: PresenceStatus.Mobile,
-      chat: PresenceStatus.Online,
-    };
-    status = statusMap[statusStr.toLowerCase()] ?? PresenceStatus.Offline;
+  if (!(await localhostDomainResolves())) {
+    logger.warn(
+      `Your machine is failing to resolve ${LOCALHOST_DOMAIN} to 127.0.0.1. ` +
+        'Deceive will not work until this is resolved. Switch to a different DNS server (like 1.1.1.1 or 8.8.8.8), ' +
+        `or add "127.0.0.1 ${LOCALHOST_DOMAIN}" to your hosts file (/etc/hosts on macOS/Linux). ` +
+        'See https://github.com/molenzwiebel/Deceive#faq for details.'
+    );
   }
 
   // Check if Riot Client is already running
   if (isClientRunning()) {
-    logger.warn('Riot Client is already running.');
-    logger.info('Attempting to stop existing Riot processes...');
+    logger.warn('The Riot Client is currently running.');
+    const stop = await confirm(
+      'To mask your status, the Riot Client needs to be started by Deceive. Stop the Riot Client and its games now?'
+    );
+    if (!stop) {
+      logger.info('Riot Client left running, exiting.');
+      process.exit(0);
+    }
     killProcesses();
-    // Wait for processes to fully exit
+    // Riot Client takes a while to die
     await new Promise((resolve) => setTimeout(resolve, 2000));
   }
 
@@ -71,57 +93,77 @@ export async function startDeceive(
     }
   }
 
-  // Prompt for status if not provided via CLI
+  let status: PresenceStatus;
   if (statusStr === null) {
+    status = resolveStartupStatus();
+  } else if (statusStr.toLowerCase() === 'prompt') {
     status = await promptForStatus();
+  } else {
+    status = STATUS_MAP[statusStr.toLowerCase()] ?? PresenceStatus.Offline;
   }
 
-  logger.info(
-    `Status: ${status === PresenceStatus.Offline ? 'Offline' : status === PresenceStatus.Mobile ? 'Mobile' : 'Online'}`
-  );
+  logger.info(`Status: ${statusLabel(status)}`);
 
-  // Step 1: Create main controller (will set up chat proxy listener)
+  // Step 1: Get the certificate used to intercept the chat connection
+  const certificate = await loadCertificate();
+
+  // Step 2: Create main controller and start the chat TLS listener
   const mainController = new MainController(status, showTray);
-
-  // Step 2: Start the chat TLS listener using Bun's native API
   const chatPort = mainController.startChatListener();
   logger.info(`Chat proxy listening on port ${chatPort}`);
 
   // Step 3: Start config proxy
-  const configProxy = new ConfigProxy(chatPort);
+  const configProxy = new ConfigProxy(chatPort, certificate.trusted);
   configProxy.start();
   logger.info(`Config proxy listening on port ${configProxy.port}`);
 
   // Step 4: Listen for chat server configuration
   let servingClients = false;
   configProxy.on('patchedChatServer', (serverConfig: ChatServerConfig) => {
-    logger.info(`Original chat server: ${serverConfig.chatHost}:${serverConfig.chatPort}`);
+    logger.debug(`Original chat server: ${serverConfig.chatHost}:${serverConfig.chatPort}`);
 
     if (!servingClients) {
       servingClients = true;
+      logger.info(`Original chat server: ${serverConfig.chatHost}:${serverConfig.chatPort}`);
       mainController.setChatServerConfig(serverConfig.chatHost, serverConfig.chatPort);
     }
   });
+
+  let shuttingDown = false;
+  let stopWatchingClient: () => void = () => {};
+  let stopCommandLoop: () => void = () => {};
+
+  const shutdown = (reason: string): void => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    logger.info(`Shutting down (${reason})...`);
+    stopWatchingClient();
+    stopCommandLoop();
+    try {
+      mainController.stop();
+      configProxy.stop();
+    } catch (err) {
+      logger.debug(`Error during shutdown: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    process.exit(0);
+  };
+
+  mainController.setQuitHandler(() => shutdown('quit'));
+  process.on('SIGINT', () => shutdown('interrupted'));
+  process.on('SIGTERM', () => shutdown('terminated'));
 
   // Step 5: Launch Riot Client with our config proxy
   const product = PRODUCT_NAMES[game];
   launchRiotClient(riotClientPath, configProxy.port, product, patchline);
 
-  // Keep the process running
+  // Step 6: Exit when the Riot Client exits
+  stopWatchingClient = watchRiotClientExit(() => shutdown('Riot Client exited'));
+
   logger.info('Deceive is running. Press Ctrl+C to exit.');
-
-  // Handle graceful shutdown
-  process.on('SIGINT', () => {
-    logger.info('Shutting down...');
-    mainController.stop();
-    configProxy.stop();
-    process.exit(0);
-  });
-
-  process.on('SIGTERM', () => {
-    logger.info('Shutting down...');
-    mainController.stop();
-    configProxy.stop();
-    process.exit(0);
+  stopCommandLoop = startCommandLoop({
+    setStatus: (newStatus) => mainController.setStatus(newStatus),
+    setEnabled: (enabled) => mainController.setEnabled(enabled),
+    describeStatus: () => mainController.describeStatus(),
+    quit: () => shutdown('quit'),
   });
 }

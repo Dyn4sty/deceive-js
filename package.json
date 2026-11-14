@@ -1,6 +1,6 @@
 {
   "name": "deceive-node",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Appear offline in League of Legends, VALORANT, and Legends of Runeterra",
   "main": "dist/index.js",
   "type": "module",
@@ -23,7 +23,9 @@
     "sign:win": "node scripts/sign-exe.mjs",
     "generate:cert": "node scripts/generate-cert.mjs",
     "release:win": "bun run package:win && bun run sign:win",
-    "package:mac": "bun build --compile --minify --sourcemap --target=bun-darwin-x64 ./src/index.ts --outfile ./dist/deceive-node-macos",
+    "package:mac": "bun build --compile --minify --sourcemap --target=bun-darwin-arm64 ./src/index.ts --outfile ./dist/deceive-node-macos",
+    "package:mac-x64": "bun build --compile --minify --sourcemap --target=bun-darwin-x64 ./src/index.ts --outfile ./dist/deceive-node-macos-x64",
+    "build:tray-mac": "bash scripts/build-tray-darwin.sh",
     "package:linux": "bun build --compile --minify --sourcemap --target=bun-linux-x64 ./src/index.ts --outfile ./dist/deceive-node-linux",
     "package:all": "bun run package:win && bun run package:mac && bun run package:linux",
     "prepare": "husky || true",

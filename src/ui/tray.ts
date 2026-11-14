@@ -1,79 +1,120 @@
-/* eslint-disable @typescript-eslint/no-unsafe-assignment */
 /**
  * System Tray Interface
  *
  * Implements system tray using systray2 library.
  */
 
-import { PresenceStatus } from '../types.js';
+import { PresenceStatus, StartupStatus } from '../types.js';
 import { logger } from '../utils/logger.js';
-import { readFileSync, existsSync } from 'fs';
-import SysTray from 'systray2';
+import { getStartupStatusOption, setStartupStatusOption } from '../config/config.js';
+import { readFileSync, existsSync, mkdirSync, writeFileSync, chmodSync } from 'fs';
+import { homedir } from 'os';
+import { join } from 'path';
+import SysTrayModule from 'systray2';
+import systrayPkg from 'systray2/package.json' with { type: 'json' };
+import packageJson from '../../package.json' with { type: 'json' };
 
 // Import icon files for embedding in compiled executables
 // @ts-expect-error - Icon files are embedded in the compiled executable
-import offlineIconPath from '../../assets/icons/offline.ico' with { type: 'file' };
+import offlineIcoPath from '../../assets/icons/offline.ico' with { type: 'file' };
 // @ts-expect-error - Icon files are embedded in the compiled executable
-import mobileIconPath from '../../assets/icons/mobile.ico' with { type: 'file' };
+import mobileIcoPath from '../../assets/icons/mobile.ico' with { type: 'file' };
 // @ts-expect-error - Icon files are embedded in the compiled executable
-import onlineIconPath from '../../assets/icons/online.ico' with { type: 'file' };
+import onlineIcoPath from '../../assets/icons/online.ico' with { type: 'file' };
+// @ts-expect-error - Icon files are embedded in the compiled executable
+import offlinePngPath from '../../assets/icons/offline.png' with { type: 'file' };
+// @ts-expect-error - Icon files are embedded in the compiled executable
+import mobilePngPath from '../../assets/icons/mobile.png' with { type: 'file' };
+// @ts-expect-error - Icon files are embedded in the compiled executable
+import onlinePngPath from '../../assets/icons/online.png' with { type: 'file' };
 
-type StatusCallback = (status: PresenceStatus) => void;
-type VoidCallback = () => void;
+// systray2 spawns a native helper from its traybin folder, which does not exist inside a
+// compiled executable, so the helpers are embedded and extracted to systray2's copyDir cache.
+// The macOS helper is a universal build from scripts/build-tray-darwin.sh, since systray2's is x86_64-only.
+// @ts-expect-error - Tray helper binaries are embedded in the compiled executable
+import trayBinDarwin from '../../assets/traybin/tray_darwin_release' with { type: 'file' };
+// @ts-expect-error - Tray helper binaries are embedded in the compiled executable
+import trayBinLinux from 'systray2/traybin/tray_linux_release' with { type: 'file' };
+// @ts-expect-error - Tray helper binaries are embedded in the compiled executable
+import trayBinWindows from 'systray2/traybin/tray_windows_release.exe' with { type: 'file' };
 
-// Tray instance and state
-let systrayInstance: SysTray.default | null = null;
-export let currentStatus: PresenceStatus = PresenceStatus.Offline;
-let statusCallback: StatusCallback | null = null;
-let quitCallback: VoidCallback | null = null;
+// systray2 is CommonJS with `exports.default`; depending on the bundler's interop the default
+// import is either the class itself or the whole exports object.
+type SysTrayClass = typeof SysTrayModule.default;
+type SysTrayInstance = InstanceType<SysTrayClass>;
+const SysTray: SysTrayClass =
+  (SysTrayModule as { default?: SysTrayClass }).default ??
+  (SysTrayModule as unknown as SysTrayClass);
 
-// Menu item references for updating checked state
 interface MenuItem {
   title: string;
   tooltip: string;
-  checked: boolean;
-  enabled: boolean;
+  checked?: boolean;
+  enabled?: boolean;
   hidden?: boolean;
+  items?: MenuItem[];
   click?: () => void;
 }
 
-let offlineItem: MenuItem;
-let mobileItem: MenuItem;
-let onlineItem: MenuItem;
+export interface TrayState {
+  status: PresenceStatus;
+  enabled: boolean;
+  connectToMuc: boolean;
+}
+
+export interface TrayCallbacks {
+  onStatusChange: (status: PresenceStatus) => void;
+  onToggleEnabled: () => void;
+  onToggleMuc: () => void;
+  onQuit: () => void;
+}
+
+const isWindows = process.platform === 'win32';
+
+let systray: SysTrayInstance | null = null;
+let state: TrayState = {
+  status: PresenceStatus.Offline,
+  enabled: true,
+  connectToMuc: true,
+};
+let currentIconStatus: PresenceStatus | null = null;
+
+let enabledItem: MenuItem;
+let statusItems: Record<PresenceStatus, MenuItem>;
+let startupItems: Record<StartupStatus, MenuItem>;
+let mucItem: MenuItem;
 
 /**
  * Get icon path for a given status
- * Returns embedded file paths when compiled, filesystem paths otherwise
+ * Windows needs .ico, macOS and Linux need .png
  */
 export function getIconPath(status: PresenceStatus): string {
-  const iconMap: Record<PresenceStatus, string> = {
-    [PresenceStatus.Offline]: offlineIconPath,
-    [PresenceStatus.Mobile]: mobileIconPath,
-    [PresenceStatus.Online]: onlineIconPath,
-  };
-  return iconMap[status] ?? iconMap[PresenceStatus.Offline];
+  const icons: Record<PresenceStatus, string> = isWindows
+    ? {
+        [PresenceStatus.Offline]: offlineIcoPath as string,
+        [PresenceStatus.Mobile]: mobileIcoPath as string,
+        [PresenceStatus.Online]: onlineIcoPath as string,
+      }
+    : {
+        [PresenceStatus.Offline]: offlinePngPath as string,
+        [PresenceStatus.Mobile]: mobilePngPath as string,
+        [PresenceStatus.Online]: onlinePngPath as string,
+      };
+  return icons[status] ?? icons[PresenceStatus.Offline];
 }
 
 /**
  * Get icon as base64 string for systray
  * Works with both embedded files (compiled) and filesystem paths (development)
  */
-async function getIconBase64Async(status: PresenceStatus): Promise<string> {
+async function getIconBase64(status: PresenceStatus): Promise<string> {
   try {
     const iconPath = getIconPath(status);
-
-    // Try Bun.file() first (works for both embedded and regular files)
-    if (typeof Bun !== 'undefined' && Bun.file) {
-      const file = Bun.file(iconPath);
-      const arrayBuffer = await file.arrayBuffer();
-      const buffer = Buffer.from(arrayBuffer);
-      return buffer.toString('base64');
+    if (typeof Bun !== 'undefined') {
+      return Buffer.from(await Bun.file(iconPath).arrayBuffer()).toString('base64');
     }
-
-    // Fallback to fs.readFileSync for compatibility
     if (existsSync(iconPath)) {
-      const iconData = readFileSync(iconPath);
-      return iconData.toString('base64');
+      return readFileSync(iconPath).toString('base64');
     }
   } catch (err: unknown) {
     logger.debug(`Failed to load icon: ${err instanceof Error ? err.message : String(err)}`);
@@ -82,200 +123,234 @@ async function getIconBase64Async(status: PresenceStatus): Promise<string> {
 }
 
 /**
- * Synchronous wrapper for getIconBase64Async
- * Note: Uses top-level await internally, only works in async contexts
+ * Extract the embedded tray helper to the path systray2 checks before copying from traybin
  */
-export function getIconBase64(status: PresenceStatus): string {
-  try {
-    const iconPath = getIconPath(status);
+async function extractTrayBinary(): Promise<void> {
+  const helpers: Partial<Record<NodeJS.Platform, [string, string]>> = {
+    darwin: ['tray_darwin_release', trayBinDarwin as string],
+    linux: ['tray_linux_release', trayBinLinux as string],
+    win32: ['tray_windows_release.exe', trayBinWindows as string],
+  };
+  const helper = helpers[process.platform];
+  if (!helper) return;
 
-    // Try Bun.file() with sync methods
-    if (typeof Bun !== 'undefined' && Bun.file) {
-      // Bun.file() returns a Blob-like object, but we need sync access
-      // For compiled executables, try reading directly
-      const file = Bun.file(iconPath);
-      // Use arrayBuffer which should work synchronously for embedded files
-      return Buffer.from(file as unknown as ArrayBuffer).toString('base64');
-    }
+  const [binName, embeddedPath] = helper;
+  const cacheDir = join(homedir(), '.cache', 'node-systray', systrayPkg.version);
+  const target = join(cacheDir, binName);
+  const data = Buffer.from(await Bun.file(embeddedPath).arrayBuffer());
 
-    // Fallback to fs.readFileSync
-    if (existsSync(iconPath)) {
-      const iconData = readFileSync(iconPath);
-      return iconData.toString('base64');
-    }
-  } catch (err: unknown) {
-    // If sync fails, we need async
-    logger.debug(
-      `Failed to load icon synchronously: ${err instanceof Error ? err.message : String(err)}`
-    );
-  }
-  return '';
+  if (existsSync(target) && readFileSync(target).equals(data)) return;
+
+  mkdirSync(cacheDir, { recursive: true });
+  writeFileSync(target, data);
+  chmodSync(target, 0o755);
 }
 
-/**
- * Update menu item checked states
- */
-function updateMenuCheckedStates(newStatus: PresenceStatus): void {
-  if (!systrayInstance) return;
+const separator = (): MenuItem => ({ title: '<SEPARATOR>', tooltip: '', enabled: true });
 
-  offlineItem.checked = newStatus === PresenceStatus.Offline;
-  mobileItem.checked = newStatus === PresenceStatus.Mobile;
-  onlineItem.checked = newStatus === PresenceStatus.Online;
+function buildMenu(callbacks: TrayCallbacks): MenuItem[] {
+  const titleItem: MenuItem = {
+    title: `Deceive v${packageJson.version}`,
+    tooltip: '',
+    enabled: false,
+  };
 
-  const systray = systrayInstance;
-  systray.sendAction({ type: 'update-item', item: offlineItem }).catch((err: Error) => {
-    logger.warn(`Failed to update offline item: ${err.message}`);
+  enabledItem = {
+    title: 'Enabled',
+    tooltip: 'Mask your status. Disable to appear with your real status.',
+    checked: state.enabled,
+    enabled: true,
+    click: () => callbacks.onToggleEnabled(),
+  };
+
+  const statusItem = (status: PresenceStatus, title: string, tooltip: string): MenuItem => ({
+    title,
+    tooltip,
+    checked: state.status === status,
+    enabled: true,
+    click: () => callbacks.onStatusChange(status),
   });
-  systray.sendAction({ type: 'update-item', item: mobileItem }).catch((err: Error) => {
-    logger.warn(`Failed to update mobile item: ${err.message}`);
+
+  statusItems = {
+    [PresenceStatus.Online]: statusItem(PresenceStatus.Online, 'Online', 'Appear online'),
+    [PresenceStatus.Offline]: statusItem(
+      PresenceStatus.Offline,
+      'Offline',
+      'Appear offline to friends'
+    ),
+    [PresenceStatus.Mobile]: statusItem(PresenceStatus.Mobile, 'Mobile', 'Appear on mobile app'),
+  };
+
+  const startupItem = (value: StartupStatus, title: string): MenuItem => ({
+    title,
+    tooltip: '',
+    checked: getStartupStatusOption() === value,
+    enabled: true,
+    click: () => {
+      setStartupStatusOption(value);
+      updateStartupItems();
+    },
   });
-  systray.sendAction({ type: 'update-item', item: onlineItem }).catch((err: Error) => {
-    logger.warn(`Failed to update online item: ${err.message}`);
+
+  startupItems = {
+    [PresenceStatus.Online]: startupItem(PresenceStatus.Online, 'Online'),
+    [PresenceStatus.Offline]: startupItem(PresenceStatus.Offline, 'Offline'),
+    [PresenceStatus.Mobile]: startupItem(PresenceStatus.Mobile, 'Mobile'),
+    last: startupItem('last', 'Remember Last'),
+  };
+
+  const startupMenu: MenuItem = {
+    title: 'Default Status on Startup',
+    tooltip: '',
+    enabled: true,
+    items: [
+      startupItems[PresenceStatus.Online],
+      startupItems[PresenceStatus.Offline],
+      startupItems[PresenceStatus.Mobile],
+      startupItems.last,
+    ],
+  };
+
+  mucItem = {
+    title: 'Enable Lobby Chat',
+    tooltip: 'Keep your presence in lobby/champion select chat rooms',
+    checked: state.connectToMuc,
+    enabled: true,
+    click: () => callbacks.onToggleMuc(),
+  };
+
+  const quitItem: MenuItem = {
+    title: 'Quit',
+    tooltip: 'Exit Deceive',
+    enabled: true,
+    click: () => callbacks.onQuit(),
+  };
+
+  return [
+    titleItem,
+    separator(),
+    enabledItem,
+    separator(),
+    statusItems[PresenceStatus.Online],
+    statusItems[PresenceStatus.Offline],
+    statusItems[PresenceStatus.Mobile],
+    separator(),
+    startupMenu,
+    mucItem,
+    separator(),
+    quitItem,
+  ];
+}
+
+function sendItem(item: MenuItem): void {
+  if (!systray) return;
+  systray.sendAction({ type: 'update-item', item }).catch((err: Error) => {
+    logger.debug(`Failed to update tray item "${item.title}": ${err.message}`);
   });
+}
+
+const STATUSES = [PresenceStatus.Online, PresenceStatus.Offline, PresenceStatus.Mobile];
+const STARTUP_OPTIONS: StartupStatus[] = [...STATUSES, 'last'];
+
+function updateStartupItems(): void {
+  const option = getStartupStatusOption();
+  for (const value of STARTUP_OPTIONS) {
+    startupItems[value].checked = value === option;
+    sendItem(startupItems[value]);
+  }
 }
 
 /**
  * Create system tray icon
  */
-export async function createTray(
-  initialStatus: PresenceStatus,
-  onStatusChange: StatusCallback,
-  _toggleCallback: VoidCallback,
-  onQuit: VoidCallback
-): Promise<void> {
-  currentStatus = initialStatus;
-  statusCallback = onStatusChange;
-  quitCallback = onQuit;
+export async function createTray(initialState: TrayState, callbacks: TrayCallbacks): Promise<void> {
+  state = { ...initialState };
 
-  // Try to initialize systray
   try {
-    // Dynamic import for systray2
-    // Create menu items with click handlers
-    offlineItem = {
-      title: 'Offline',
-      tooltip: 'Appear offline to friends',
-      checked: initialStatus === PresenceStatus.Offline,
-      enabled: true,
-      click: () => {
-        if (statusCallback) {
-          statusCallback(PresenceStatus.Offline);
-        }
-      },
-    };
+    await extractTrayBinary();
+    const icon = await getIconBase64(state.status);
+    currentIconStatus = state.status;
 
-    mobileItem = {
-      title: 'Mobile',
-      tooltip: 'Appear on mobile app',
-      checked: initialStatus === PresenceStatus.Mobile,
-      enabled: true,
-      click: () => {
-        if (statusCallback) {
-          statusCallback(PresenceStatus.Mobile);
-        }
-      },
-    };
-
-    onlineItem = {
-      title: 'Online',
-      tooltip: 'Appear online',
-      checked: initialStatus === PresenceStatus.Online,
-      enabled: true,
-      click: () => {
-        if (statusCallback) {
-          statusCallback(PresenceStatus.Online);
-        }
-      },
-    };
-
-    const separatorItem = {
-      title: '<SEPARATOR>',
-      tooltip: '',
-      checked: false,
-      enabled: true,
-    };
-
-    const quitItem = {
-      title: 'Quit',
-      tooltip: 'Exit League Deceiver',
-      checked: false,
-      enabled: true,
-      click: () => {
-        if (quitCallback) {
-          quitCallback();
-        }
-      },
-    };
-
-    const iconBase64 = await getIconBase64Async(initialStatus);
-    // @ts-expect-error - SysTray is not constructable in ESM
-    systrayInstance = new SysTray({
+    const instance = new SysTray({
       menu: {
-        icon: iconBase64,
-        title: 'Deceive',
+        icon,
+        isTemplateIcon: false,
+        // macOS shows the title next to the menu bar icon
+        title: process.platform === 'darwin' ? '' : 'Deceive',
         tooltip: 'Deceive - Appear Offline',
-        items: [offlineItem, mobileItem, onlineItem, separatorItem, quitItem],
+        items: buildMenu(callbacks),
       },
       debug: false,
-      copyDir: true, // Important for bundled executables
+      copyDir: true,
+    });
+    systray = instance;
+
+    void instance.onClick((action) => {
+      (action.item as MenuItem).click?.();
     });
 
-    const systray = systrayInstance as {
-      onClick: (handler: (action: { item: MenuItem }) => void) => void;
-      ready: () => Promise<void>;
-    };
-
-    systray.onClick((action) => {
-      if (action.item.click) {
-        action.item.click();
-      }
+    await instance.ready();
+    // The helper process only exists once ready() resolves
+    instance.onError((err) => {
+      logger.warn(`System tray error: ${err.message}`);
     });
-
-    systray
-      .ready()
-      .then(() => {
-        logger.info('System tray initialized');
-      })
-      .catch((err: Error) => {
-        logger.warn(`System tray failed to start: ${err.message}`);
-        logger.info('Running in CLI mode. Use chat commands to change status.');
-      });
+    logger.info('System tray initialized');
   } catch (err) {
+    systray = null;
     logger.warn(
       `System tray initialization failed: ${err instanceof Error ? err.message : String(err)}`
-    );
-    logger.info(
-      'Running in CLI mode. Commands: offline, online, mobile, enable, disable, status, help'
     );
   }
 }
 
 /**
- * Update tray status and icon
+ * Sync tray menu and icon with the controller state
  */
-export function updateTrayStatus(status: PresenceStatus): void {
-  currentStatus = status;
+export function updateTray(newState: TrayState): void {
+  state = { ...newState };
+  if (!systray) return;
 
-  if (systrayInstance) {
-    updateMenuCheckedStates(status);
-    // Note: Updating the tray icon dynamically is complex with systray2
-    // The checked states on menu items are the primary visual feedback
+  enabledItem.checked = state.enabled;
+  sendItem(enabledItem);
+
+  for (const status of STATUSES) {
+    statusItems[status].checked = status === state.status;
+    sendItem(statusItems[status]);
   }
 
-  logger.debug(`Status updated: ${status}`);
+  mucItem.checked = state.connectToMuc;
+  sendItem(mucItem);
+
+  const iconStatus = state.enabled ? state.status : PresenceStatus.Online;
+  if (iconStatus !== currentIconStatus) {
+    currentIconStatus = iconStatus;
+    void getIconBase64(iconStatus).then((icon) => {
+      systray
+        ?.sendAction({
+          type: 'update-menu',
+          menu: {
+            icon,
+            isTemplateIcon: false,
+            title: process.platform === 'darwin' ? '' : 'Deceive',
+            tooltip: 'Deceive - Appear Offline',
+            items: [],
+          },
+        })
+        .catch((err: Error) => logger.debug(`Failed to update tray icon: ${err.message}`));
+    });
+  }
 }
 
 /**
  * Destroy tray icon
  */
 export function destroyTray(): void {
-  if (systrayInstance) {
-    try {
-      const systray = systrayInstance as { kill: (exitNode: boolean) => void };
-      systray.kill(false);
-      systrayInstance = null;
-    } catch (err) {
-      logger.debug(`Error destroying tray: ${err instanceof Error ? err.message : String(err)}`);
-    }
+  if (!systray) return;
+  try {
+    void systray.kill(false);
+  } catch (err) {
+    logger.debug(`Error destroying tray: ${err instanceof Error ? err.message : String(err)}`);
   }
+  systray = null;
   logger.debug('Tray destroyed');
 }

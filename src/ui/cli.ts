@@ -6,6 +6,20 @@ import { createInterface } from 'readline';
 import chalk from 'chalk';
 import { LaunchGame, PresenceStatus } from '../types.js';
 
+function ask(question: string): Promise<string> {
+  const rl = createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+
+  return new Promise((resolve) => {
+    rl.question(question, (answer) => {
+      rl.close();
+      resolve(answer.trim());
+    });
+  });
+}
+
 /**
  * Prompt user to select a game
  */
@@ -14,44 +28,25 @@ export async function promptForGame(): Promise<LaunchGame> {
   console.log(chalk.bold('Select a game to launch:'));
   console.log('');
   console.log('  1. League of Legends');
-  console.log('  2. VALORANT');
-  console.log('  3. Legends of Runeterra');
-  console.log('  4. 2XKO (Lion)');
-  console.log('  5. Riot Client only');
+  console.log('  2. Teamfight Tactics');
+  console.log('  3. VALORANT');
+  console.log('  4. Legends of Runeterra');
+  console.log('  5. 2XKO (Lion)');
+  console.log('  6. Riot Client only');
   console.log('  0. Cancel');
   console.log('');
 
-  const rl = createInterface({
-    input: process.stdin,
-    output: process.stdout,
-  });
+  const choices: Record<string, LaunchGame> = {
+    '1': LaunchGame.LoL,
+    '2': LaunchGame.TFT,
+    '3': LaunchGame.VALORANT,
+    '4': LaunchGame.LoR,
+    '5': LaunchGame.Lion,
+    '6': LaunchGame.RiotClient,
+  };
 
-  return new Promise((resolve) => {
-    rl.question(chalk.cyan('Enter your choice (0-5): '), (answer) => {
-      rl.close();
-
-      switch (answer.trim()) {
-        case '1':
-          resolve(LaunchGame.LoL);
-          break;
-        case '2':
-          resolve(LaunchGame.VALORANT);
-          break;
-        case '3':
-          resolve(LaunchGame.LoR);
-          break;
-        case '4':
-          resolve(LaunchGame.Lion);
-          break;
-        case '5':
-          resolve(LaunchGame.RiotClient);
-          break;
-        default:
-          resolve(LaunchGame.Prompt);
-          break;
-      }
-    });
-  });
+  const answer = await ask(chalk.cyan('Enter your choice (0-6): '));
+  return choices[answer] ?? LaunchGame.Prompt;
 }
 
 /**
@@ -66,29 +61,81 @@ export async function promptForStatus(): Promise<PresenceStatus> {
   console.log('  3. Online (normal status)');
   console.log('');
 
-  const rl = createInterface({
-    input: process.stdin,
-    output: process.stdout,
+  const answer = await ask(chalk.cyan('Enter your choice (1-3) [1]: '));
+  switch (answer) {
+    case '2':
+      return PresenceStatus.Mobile;
+    case '3':
+      return PresenceStatus.Online;
+    default:
+      return PresenceStatus.Offline;
+  }
+}
+
+/**
+ * Ask a yes/no question. Returns defaultYes when stdin is not interactive.
+ */
+export async function confirm(question: string, defaultYes = true): Promise<boolean> {
+  if (!process.stdin.isTTY) return defaultYes;
+  const answer = (
+    await ask(chalk.cyan(`${question} ${defaultYes ? '[Y/n]' : '[y/N]'} `))
+  ).toLowerCase();
+  if (!answer) return defaultYes;
+  return answer === 'y' || answer === 'yes';
+}
+
+export interface CommandHandlers {
+  setStatus: (status: PresenceStatus) => void;
+  setEnabled: (enabled: boolean) => void;
+  describeStatus: () => string;
+  quit: () => void;
+}
+
+const COMMANDS_HELP = 'Commands: offline, online, mobile, enable, disable, status, help, quit';
+
+/**
+ * Read status commands from stdin while Deceive is running
+ */
+export function startCommandLoop(handlers: CommandHandlers): () => void {
+  if (!process.stdin.isTTY) return () => {};
+
+  const rl = createInterface({ input: process.stdin, output: process.stdout, terminal: false });
+  console.log(chalk.gray(COMMANDS_HELP));
+
+  rl.on('line', (line) => {
+    switch (line.trim().toLowerCase()) {
+      case '':
+        break;
+      case 'offline':
+        handlers.setStatus(PresenceStatus.Offline);
+        break;
+      case 'online':
+        handlers.setStatus(PresenceStatus.Online);
+        break;
+      case 'mobile':
+        handlers.setStatus(PresenceStatus.Mobile);
+        break;
+      case 'enable':
+        handlers.setEnabled(true);
+        console.log(handlers.describeStatus());
+        break;
+      case 'disable':
+        handlers.setEnabled(false);
+        console.log(handlers.describeStatus());
+        break;
+      case 'status':
+        console.log(handlers.describeStatus());
+        break;
+      case 'quit':
+      case 'exit':
+        handlers.quit();
+        break;
+      default:
+        console.log(COMMANDS_HELP);
+    }
   });
 
-  return new Promise((resolve) => {
-    rl.question(chalk.cyan('Enter your choice (1-3) [1]: '), (answer) => {
-      rl.close();
-
-      switch (answer.trim()) {
-        case '2':
-          resolve(PresenceStatus.Mobile);
-          break;
-        case '3':
-          resolve(PresenceStatus.Online);
-          break;
-        case '1':
-        default:
-          resolve(PresenceStatus.Offline);
-          break;
-      }
-    });
-  });
+  return () => rl.close();
 }
 
 /**

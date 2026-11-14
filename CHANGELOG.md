@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0](https://github.com/Dyn4sty/deceive-node/compare/v1.1.0...v1.2.0) (2026-11-13)
+
+### Added
+
+- Native Apple Silicon (universal) tray helper for macOS, embedded in the compiled executable
+- Tray menu: Enabled toggle, Default Status on Startup, Enable Lobby Chat
+- Teamfight Tactics support (`launch tft`), direct game launch with `--allow-direct-launch`
+- Terminal commands while running: offline, online, mobile, enable, disable, status, help, quit
+- `--no-tray` and `--status prompt` options
+- Deceive exits when the Riot Client exits
+
+### Changed
+
+- Chat proxy uses the valid `deceive-localhost.molenzwiebel.xyz` certificate (upstream Deceive), with a self-signed fallback
+- Updated VALORANT fake player presence, strips standalone TFT presence, keeps in-game state when appearing online (upstream Deceive)
+- Startup status remembers the last session by default; introduction messages are shown only on the first run
+- Outgoing chat server TLS certificate is now validated
+- Stops a running Riot Client only after confirmation
+
+### Bug Fixes
+
+- System tray failing to start in compiled executables ("Object is not a constructor")
+- Crash on Ctrl+C ("Connection closed" unhandled error)
+- Launching without arguments started with an Online status
+
 ## [1.0.1](https://github.com/Dyn4sty/deceive-node/compare/v1.0.0...v1.0.1) (2025-12-12)
 
 

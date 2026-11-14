@@ -4,6 +4,8 @@
 export enum LaunchGame {
   /** Attempt to start League of Legends */
   LoL = 'lol',
+  /** Attempt to start Teamfight Tactics */
+  TFT = 'tft',
   /** Attempt to start Legends of Runeterra */
   LoR = 'lor',
   /** Attempt to start VALORANT */
@@ -28,6 +30,11 @@ export enum PresenceStatus {
 }
 
 /**
+ * Status to use on startup: a fixed status, or 'last' to remember the previous session
+ */
+export type StartupStatus = PresenceStatus | 'last';
+
+/**
  * Chat server configuration from Riot
  */
 export interface ChatServerConfig {
@@ -40,9 +47,12 @@ export interface ChatServerConfig {
  */
 export interface AppConfig {
   defaultGame: LaunchGame;
+  /** Status of the last session, used when startupStatus is 'last' */
   defaultStatus: PresenceStatus;
+  startupStatus: StartupStatus;
   lastPromptedVersion: string;
   connectToMuc: boolean;
+  introductionShown: boolean;
 }
 
 /**
@@ -50,6 +60,7 @@ export interface AppConfig {
  */
 export const PRODUCT_NAMES: Record<LaunchGame, string | null> = {
   [LaunchGame.LoL]: 'league_of_legends',
+  [LaunchGame.TFT]: 'teamfighttactics',
   [LaunchGame.LoR]: 'bacon',
   [LaunchGame.VALORANT]: 'valorant',
   [LaunchGame.Lion]: 'lion',
@@ -57,3 +68,17 @@ export const PRODUCT_NAMES: Record<LaunchGame, string | null> = {
   [LaunchGame.Prompt]: null,
   [LaunchGame.Auto]: null,
 };
+
+/**
+ * Human-readable status name
+ */
+export function statusLabel(status: PresenceStatus): string {
+  switch (status) {
+    case PresenceStatus.Online:
+      return 'online';
+    case PresenceStatus.Mobile:
+      return 'mobile';
+    case PresenceStatus.Offline:
+      return 'offline';
+  }
+}

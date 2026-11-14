@@ -19,6 +19,8 @@ export function launchRiotClient(
   if (product) {
     args.push(`--launch-product=${product}`);
     args.push(`--launch-patchline=${patchline}`);
+    // Skip the Riot Client UI and launch the game directly
+    args.push('--allow-direct-launch');
   }
 
   logger.info(`Launching Riot Client with args: ${args.join(' ')}`);

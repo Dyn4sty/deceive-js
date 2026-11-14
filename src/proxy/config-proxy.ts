@@ -8,6 +8,7 @@
 import { EventEmitter } from 'events';
 import { ChatServerConfig } from '../types.js';
 import { logger } from '../utils/logger.js';
+import { LOCALHOST_DOMAIN } from './certificate.js';
 
 const CONFIG_URL = 'https://clientconfig.rpg.riotgames.com';
 const GEO_PAS_URL = 'https://riot-geo.pas.si.riotgames.com/pas/v1/service/chat';
@@ -20,10 +21,18 @@ export class ConfigProxy extends EventEmitter {
   private server: ReturnType<typeof Bun.serve> | null = null;
   private _port: number = 0;
   private chatPort: number;
+  private chatHostOverride: string;
+  private trustedCertificate: boolean;
 
-  constructor(chatPort: number) {
+  /**
+   * @param trustedCertificate Whether the chat proxy serves the valid certificate for
+   *   LOCALHOST_DOMAIN. If not, point the client at 127.0.0.1 and ask it to allow a bad cert.
+   */
+  constructor(chatPort: number, trustedCertificate: boolean) {
     super();
     this.chatPort = chatPort;
+    this.trustedCertificate = trustedCertificate;
+    this.chatHostOverride = trustedCertificate ? LOCALHOST_DOMAIN : '127.0.0.1';
   }
 
   get port(): number {
@@ -93,10 +102,10 @@ export class ConfigProxy extends EventEmitter {
         let riotChatHost: string | null = null;
         let riotChatPort = 0;
 
-        // Rewrite chat.host to localhost
+        // Rewrite chat.host to the local proxy
         if ('chat.host' in config && typeof config['chat.host'] === 'string') {
           riotChatHost = config['chat.host'];
-          config['chat.host'] = '127.0.0.1';
+          config['chat.host'] = this.chatHostOverride;
         }
 
         // Rewrite chat.port to our proxy port
@@ -136,14 +145,13 @@ export class ConfigProxy extends EventEmitter {
             }
           }
 
-          // Rewrite all affinities to localhost
+          // Rewrite all affinities to the local proxy
           for (const key of Object.keys(affinities)) {
-            affinities[key] = '127.0.0.1';
+            affinities[key] = this.chatHostOverride;
           }
         }
 
-        // Allow bad certificates (for our self-signed cert)
-        if ('chat.allow_bad_cert.enabled' in config) {
+        if (!this.trustedCertificate && 'chat.allow_bad_cert.enabled' in config) {
           config['chat.allow_bad_cert.enabled'] = true;
         }
 

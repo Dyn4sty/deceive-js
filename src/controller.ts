@@ -7,11 +7,12 @@
  */
 
 import type { Socket, TCPSocketListener } from 'bun';
-import { PresenceStatus } from './types.js';
+import { PresenceStatus, statusLabel } from './types.js';
 import { ProxiedConnection } from './proxy/proxied-connection.js';
 import { getCertificate } from './proxy/certificate.js';
 import { logger } from './utils/logger.js';
-import { createTray, updateTrayStatus, destroyTray } from './ui/tray.js';
+import { config, saveLastStatus } from './config/config.js';
+import { createTray, updateTray, destroyTray } from './ui/tray.js';
 
 /**
  * Socket data attached to both incoming and outgoing sockets.
@@ -25,7 +26,7 @@ type SocketData = {
 export class MainController {
   private status: PresenceStatus;
   private enabled = true;
-  private connectToMuc = true;
+  private connectToMuc: boolean;
   private connections: ProxiedConnection[] = [];
   private showTray: boolean;
   private shutdownTimer: ReturnType<typeof setTimeout> | null = null;
@@ -33,25 +34,42 @@ export class MainController {
   private chatServer: TCPSocketListener<SocketData> | null = null;
   private chatHost: string = '';
   private chatPort: number = 0;
+  private stopped = false;
+  private onQuit: () => void = () => process.exit(0);
 
   constructor(initialStatus: PresenceStatus, showTray: boolean) {
     this.status = initialStatus;
     this.showTray = showTray;
+    this.connectToMuc = config.get('connectToMuc');
+    saveLastStatus(initialStatus);
 
     if (showTray) {
-      void this.initTray();
+      void createTray(this.getTrayState(), {
+        onStatusChange: (newStatus) => this.setStatus(newStatus),
+        onToggleEnabled: () => this.toggleEnabled(),
+        onToggleMuc: () => this.toggleConnectToMuc(),
+        onQuit: () => this.quit(),
+      });
     }
 
-    logger.info(`Initial status: ${this.status}`);
+    logger.info(`Initial status: ${statusLabel(this.status)}`);
   }
 
-  private async initTray(): Promise<void> {
-    await createTray(
-      this.status,
-      (newStatus) => void this.setStatus(newStatus),
-      () => void this.toggleEnabled(),
-      () => void this.quit()
-    );
+  /**
+   * Set the handler used to shut down the whole application (tray Quit, CLI quit, idle shutdown)
+   */
+  setQuitHandler(handler: () => void): void {
+    this.onQuit = handler;
+  }
+
+  private getTrayState() {
+    return { status: this.status, enabled: this.enabled, connectToMuc: this.connectToMuc };
+  }
+
+  private syncTray(): void {
+    if (this.showTray) {
+      updateTray(this.getTrayState());
+    }
   }
 
   /**
@@ -143,7 +161,7 @@ export class MainController {
     Bun.connect<SocketData>({
       hostname: this.chatHost,
       port: this.chatPort,
-      tls: { rejectUnauthorized: false },
+      tls: { serverName: this.chatHost },
       socket: {
         open: (outgoingSocket) => {
           logger.debug('Connected to real chat server');
@@ -153,23 +171,18 @@ export class MainController {
           socket.data?.proxiedConnection?.handleOutgoingData(data);
         },
         close: (socket) => {
-          const proxied = socket.data?.proxiedConnection;
-          if (proxied) {
-            proxied.handleClose();
-            this.removeConnection(proxied);
-          }
+          socket.data?.proxiedConnection?.handleClose();
         },
         error: (socket, error) => {
           logger.error(`Outgoing socket error: ${error.message}`);
-          const proxied = socket.data?.proxiedConnection;
-          if (proxied) {
-            proxied.handleClose();
-            this.removeConnection(proxied);
-          }
+          socket.data?.proxiedConnection?.handleClose();
         },
       },
-    }).catch((err) => {
-      logger.error(`Failed to connect to chat server: ${err}`);
+    }).catch((err: unknown) => {
+      logger.error(
+        `Failed to connect to chat server ${this.chatHost}:${this.chatPort}: ${err instanceof Error ? err.message : String(err)}`
+      );
+      incomingSocket.end();
     });
   }
 
@@ -180,8 +193,8 @@ export class MainController {
     incomingSocket: Socket<SocketData>,
     outgoingSocket: Socket<SocketData>
   ): void {
-    // Create the proxied connection
     const proxiedConnection = new ProxiedConnection(this, incomingSocket, outgoingSocket);
+    proxiedConnection.on('close', () => this.removeConnection(proxiedConnection));
 
     // Get buffered data before overwriting socket.data
     const pendingData = incomingSocket.data?.pendingData ?? [];
@@ -199,9 +212,10 @@ export class MainController {
     }
 
     this.connections.push(proxiedConnection);
+    logger.info('Chat connection established, presence is being masked');
 
-    // Send introduction messages after first connection (with 10s delay)
-    if (!this.sentIntroductionText) {
+    // Send introduction messages once, on the very first run (10s delay)
+    if (!this.sentIntroductionText && !config.get('introductionShown')) {
       this.sentIntroductionText = true;
       setTimeout(() => void this.sendIntroductionMessages(), 10000);
     }
@@ -209,14 +223,16 @@ export class MainController {
 
   private removeConnection(proxied: ProxiedConnection): void {
     this.connections = this.connections.filter((c) => c !== proxied);
-    if (this.connections.length === 0) {
+    logger.debug('Chat connection closed');
+    if (this.connections.length === 0 && !this.stopped) {
       this.scheduleShutdown();
     }
   }
 
   private scheduleShutdown(): void {
+    if (this.shutdownTimer) clearTimeout(this.shutdownTimer);
     this.shutdownTimer = setTimeout(() => {
-      logger.info('No connections for 60s, shutting down');
+      logger.info('No chat connections for 60s, shutting down');
       this.quit();
     }, 60000);
   }
@@ -236,31 +252,54 @@ export class MainController {
   setStatus(newStatus: PresenceStatus): void {
     this.status = newStatus;
     this.enabled = true;
-    logger.info(`Status changed to: ${newStatus}`);
+    saveLastStatus(newStatus);
+    logger.info(`Status changed to: ${statusLabel(newStatus)}`);
 
-    if (this.showTray) {
-      updateTrayStatus(newStatus);
-    }
+    this.syncTray();
 
     for (const connection of this.connections) {
       connection.updateStatus(newStatus);
     }
 
-    const statusText = newStatus === PresenceStatus.Online ? 'online' : newStatus;
-    this.sendMessageFromFakePlayer(`You are now appearing ${statusText}.`);
+    this.sendMessageFromFakePlayer(`You are now appearing ${statusLabel(newStatus)}.`);
+  }
+
+  setEnabled(enabled: boolean): void {
+    if (this.enabled === enabled) {
+      this.sendMessageFromFakePlayer(
+        enabled ? 'Deceive is already enabled.' : 'Deceive is already disabled.'
+      );
+      return;
+    }
+    this.toggleEnabled();
   }
 
   toggleEnabled(): void {
     this.enabled = !this.enabled;
     const status = this.enabled ? this.status : PresenceStatus.Online;
+    logger.info(this.enabled ? 'Deceive enabled' : 'Deceive disabled');
 
     for (const connection of this.connections) {
       connection.updateStatus(status);
     }
 
+    this.syncTray();
     this.sendMessageFromFakePlayer(
       this.enabled ? 'Deceive is now enabled.' : 'Deceive is now disabled.'
     );
+  }
+
+  toggleConnectToMuc(): void {
+    this.connectToMuc = !this.connectToMuc;
+    config.set('connectToMuc', this.connectToMuc);
+    logger.info(`Lobby chat ${this.connectToMuc ? 'enabled' : 'disabled'}`);
+    this.syncTray();
+  }
+
+  describeStatus(): string {
+    return this.enabled
+      ? `Deceive is enabled. You are appearing ${statusLabel(this.status)}.`
+      : 'Deceive is disabled. You are appearing with your real status.';
   }
 
   sendMessageFromFakePlayer(message: string): void {
@@ -273,10 +312,10 @@ export class MainController {
    * Send introduction messages to the user explaining how Deceive works.
    */
   private async sendIntroductionMessages(): Promise<void> {
-    const statusText = this.status === PresenceStatus.Online ? 'online' : this.status;
+    config.set('introductionShown', true);
 
     this.sendMessageFromFakePlayer(
-      `Welcome! Deceive is running and you are currently appearing ${statusText}. ` +
+      `Welcome! Deceive is running and you are currently appearing ${statusLabel(this.status)}. ` +
         'Despite what the game client may indicate, you are appearing offline to your friends unless you manually disable Deceive.'
     );
 
@@ -288,7 +327,8 @@ export class MainController {
 
     await this.delay(200);
     this.sendMessageFromFakePlayer(
-      'To enable or disable Deceive, or to configure other settings, find Deceive in your tray icons.'
+      'To enable or disable Deceive, or to configure other settings, find Deceive in your tray icons, ' +
+        'or send me a message: online, offline, mobile, enable, disable, status.'
     );
 
     await this.delay(200);
@@ -309,20 +349,11 @@ export class MainController {
     } else if (lowerContent.includes('online')) {
       this.setStatus(PresenceStatus.Online);
     } else if (lowerContent.includes('enable')) {
-      if (!this.enabled) {
-        this.toggleEnabled();
-      } else {
-        this.sendMessageFromFakePlayer('Deceive is already enabled.');
-      }
+      this.setEnabled(true);
     } else if (lowerContent.includes('disable')) {
-      if (this.enabled) {
-        this.toggleEnabled();
-      } else {
-        this.sendMessageFromFakePlayer('Deceive is already disabled.');
-      }
+      this.setEnabled(false);
     } else if (lowerContent.includes('status')) {
-      const statusText = this.status === PresenceStatus.Online ? 'online' : this.status;
-      this.sendMessageFromFakePlayer(`You are appearing ${statusText}.`);
+      this.sendMessageFromFakePlayer(this.describeStatus());
     } else if (lowerContent.includes('help')) {
       this.sendMessageFromFakePlayer(
         'Commands: online, offline, mobile, enable, disable, status, help'
@@ -331,16 +362,21 @@ export class MainController {
   }
 
   stop(): void {
+    if (this.stopped) return;
+    this.stopped = true;
+
     if (this.shutdownTimer) {
       clearTimeout(this.shutdownTimer);
+      this.shutdownTimer = null;
     }
 
-    for (const connection of this.connections) {
+    for (const connection of [...this.connections]) {
       connection.close();
     }
+    this.connections = [];
 
     if (this.chatServer) {
-      this.chatServer.stop();
+      this.chatServer.stop(true);
       this.chatServer = null;
     }
 
@@ -350,7 +386,6 @@ export class MainController {
   }
 
   quit(): void {
-    this.stop();
-    process.exit(0);
+    this.onQuit();
   }
 }

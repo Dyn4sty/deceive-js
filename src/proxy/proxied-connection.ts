@@ -14,11 +14,48 @@ import type { MainController } from '../controller.js';
 // Fake player JID for in-app messaging
 const FAKE_PLAYER_JID = '41c322a1-b328-495b-a004-5ccd3e45eae8@eu1.pvp.net';
 
+// Game presences that are stripped entirely when not appearing online
+const STRIPPED_GAMES = ['bacon', 'lion', 'keystone', 'riot_client', 'teamfighttactics'];
+
+const PRESENCE_STANZA = /<presence\b[^>]*?(?:\/>|>[\s\S]*?<\/presence>)/g;
+
 interface ProxiedConnectionEvents {
-  error: (err: Error) => void;
+  close: () => void;
 }
 
 type SocketData = { proxiedConnection?: ProxiedConnection };
+
+function elementPattern(name: string): RegExp {
+  return new RegExp(`<${name}\\b[^>]*?(?:\\/>|>[\\s\\S]*?<\\/${name}>)`, 'g');
+}
+
+function removeElement(xml: string, name: string): string {
+  return xml.replace(elementPattern(name), '');
+}
+
+function setElementText(xml: string, name: string, value: string): string {
+  return xml.replace(elementPattern(name), `<${name}>${value}</${name}>`);
+}
+
+/**
+ * Apply fn to the inner content of the first <name>...</name> element
+ */
+function mapElementContent(xml: string, name: string, fn: (inner: string) => string): string {
+  const pattern = new RegExp(`(<${name}\\b[^>]*>)([\\s\\S]*?)(<\\/${name}>)`);
+  return xml.replace(pattern, (_, open: string, inner: string, close: string) => {
+    return open + fn(inner) + close;
+  });
+}
+
+function getElementText(xml: string, name: string): string | null {
+  const match = new RegExp(`<${name}\\b[^>]*>([^<]*)<\\/${name}>`).exec(xml);
+  return match?.[1] ?? null;
+}
+
+function getElementContent(xml: string, name: string): string | null {
+  const match = new RegExp(`<${name}\\b[^>]*>([\\s\\S]*?)<\\/${name}>`).exec(xml);
+  return match?.[1] ?? null;
+}
 
 export class ProxiedConnection extends EventEmitter {
   private controller: MainController;
@@ -55,7 +92,8 @@ export class ProxiedConnection extends EventEmitter {
         logger.debug('Intercepting presence stanza');
         this.rewriteAndSendPresence(content, this.controller.getStatus());
       } else if (content.includes(FAKE_PLAYER_JID)) {
-        void this.controller.handleChatMessage(content);
+        // Don't send anything involving our fake player to the chat server
+        this.controller.handleChatMessage(content);
         logger.debug('Intercepted message to fake player');
       } else {
         this.outgoing.write(data);
@@ -116,68 +154,22 @@ export class ProxiedConnection extends EventEmitter {
   }
 
   private rewriteAndSendPresence(content: string, targetStatus: PresenceStatus): void {
+    this.lastPresence = content;
+    let foundValorantVersion = false;
+
     try {
-      this.lastPresence = content;
-      let modified = content;
+      const modified = content.replace(PRESENCE_STANZA, (presence) => {
+        const openingTag = /^<presence\b[^>]*>/.exec(presence)?.[0] ?? '';
 
-      // Presence with 'to' is for MUC (lobby chat), leave those alone if connectToMuc is true
-      if (this.controller.shouldConnectToMuc() && content.includes(' to=')) {
-        this.outgoing.write(Buffer.from(content, 'utf-8'));
-        return;
-      }
-
-      // Rewrite <show> element
-      modified = modified.replace(/<show>[^<]*<\/show>/g, `<show>${targetStatus}</show>`);
-
-      // Rewrite League of Legends status
-      modified = modified.replace(
-        /(<games>.*?<league_of_legends>.*?)<st>[^<]*<\/st>/gs,
-        `$1<st>${targetStatus}</st>`
-      );
-
-      if (targetStatus !== PresenceStatus.Online) {
-        // Remove <status> element
-        modified = modified.replace(/<status>[^<]*<\/status>/g, '');
-
-        if (targetStatus === PresenceStatus.Mobile) {
-          modified = modified.replace(/<league_of_legends>.*?<p>[^<]*<\/p>/gs, (match) =>
-            match.replace(/<p>[^<]*<\/p>/g, '')
-          );
-          modified = modified.replace(/<league_of_legends>.*?<m>[^<]*<\/m>/gs, (match) =>
-            match.replace(/<m>[^<]*<\/m>/g, '')
-          );
-        } else {
-          modified = modified.replace(/<league_of_legends>.*?<\/league_of_legends>/gs, '');
+        // Presence with 'to' is for MUC (lobby chat): pass through, or drop if lobby chat is disabled
+        if (/\sto=/.test(openingTag)) {
+          return this.controller.shouldConnectToMuc() ? presence : '';
         }
 
-        // Remove other game presences
-        modified = modified.replace(/<bacon>.*?<\/bacon>/gs, '');
-        modified = modified.replace(/<lion>.*?<\/lion>/gs, '');
-        modified = modified.replace(/<keystone>.*?<\/keystone>/gs, '');
-        modified = modified.replace(/<riot_client>.*?<\/riot_client>/gs, '');
-
-        // Extract VALORANT version before removing
-        if (!this.valorantVersion) {
-          const valorantMatch = /<valorant>.*?<p>([^<]+)<\/p>/s.exec(modified);
-          if (valorantMatch?.[1]) {
-            try {
-              const decoded = Buffer.from(valorantMatch[1], 'base64').toString('utf-8');
-              const valorantData = JSON.parse(decoded) as Record<string, unknown>;
-              const partyData = valorantData['partyPresenceData'] as
-                | Record<string, unknown>
-                | undefined;
-              if (partyData?.['partyClientVersion']) {
-                this.valorantVersion = partyData['partyClientVersion'] as string;
-                logger.debug(`Found VALORANT version: ${this.valorantVersion}`);
-              }
-            } catch {
-              // Ignore parsing errors
-            }
-          }
-        }
-
-        modified = modified.replace(/<valorant>.*?<\/valorant>/gs, '');
-      }
+        const rewritten = this.rewritePresence(presence, targetStatus);
+        if (rewritten.foundValorantVersion) foundValorantVersion = true;
+        return rewritten.xml;
+      });
 
       this.outgoing.write(Buffer.from(modified, 'utf-8'));
       logger.debug('Sent modified presence');
@@ -185,17 +177,142 @@ export class ProxiedConnection extends EventEmitter {
       logger.error('Error rewriting presence:', err);
       this.outgoing.write(Buffer.from(content, 'utf-8'));
     }
+
+    // Resend the fake player presence with the detected VALORANT version
+    if (foundValorantVersion && this.insertedFakePlayer) {
+      this.sendFakePlayerPresence();
+    }
+  }
+
+  private rewritePresence(
+    presence: string,
+    targetStatus: PresenceStatus
+  ): { xml: string; foundValorantVersion: boolean } {
+    let xml = presence;
+    let foundValorantVersion = false;
+
+    const leagueContent = getElementContent(xml, 'league_of_legends');
+    const leagueState = leagueContent !== null ? getElementText(leagueContent, 'st') : null;
+
+    // When appearing online, keep the in-game (dnd) state as-is
+    if (targetStatus !== PresenceStatus.Online || leagueState !== 'dnd') {
+      xml = setElementText(xml, 'show', targetStatus);
+      xml = mapElementContent(xml, 'league_of_legends', (inner) =>
+        setElementText(inner, 'st', targetStatus)
+      );
+    }
+
+    if (targetStatus === PresenceStatus.Online) {
+      return { xml, foundValorantVersion };
+    }
+
+    xml = removeElement(xml, 'status');
+
+    if (targetStatus === PresenceStatus.Mobile) {
+      xml = mapElementContent(xml, 'league_of_legends', (inner) =>
+        removeElement(removeElement(inner, 'p'), 'm')
+      );
+    } else {
+      xml = removeElement(xml, 'league_of_legends');
+    }
+
+    for (const game of STRIPPED_GAMES) {
+      xml = removeElement(xml, game);
+    }
+
+    // Extract the VALORANT version from the user's own presence, so the fake player
+    // can use it and avoid a "Version Mismatch" warning.
+    if (!this.valorantVersion) {
+      const valorantContent = getElementContent(xml, 'valorant');
+      const valorantBase64 = valorantContent ? getElementText(valorantContent, 'p') : null;
+      if (valorantBase64?.trim()) {
+        try {
+          const decoded = Buffer.from(valorantBase64, 'base64').toString('utf-8');
+          const valorantData = JSON.parse(decoded) as Record<string, unknown>;
+          const partyData = valorantData['partyPresenceData'] as
+            | Record<string, unknown>
+            | undefined;
+          const version = partyData?.['partyClientVersion'];
+          if (typeof version === 'string' && version) {
+            this.valorantVersion = version;
+            foundValorantVersion = true;
+            logger.debug(`Found VALORANT version: ${version}`);
+          }
+        } catch {
+          // Ignore parsing errors
+        }
+      }
+    }
+
+    xml = removeElement(xml, 'valorant');
+
+    return { xml, foundValorantVersion };
   }
 
   private sendFakePlayerPresence(): void {
     this.sentFakePlayerPresence = true;
 
+    // VALORANT requires a recent version to not display "Version Mismatch"
     const valorantPresence = Buffer.from(
       JSON.stringify({
         isValid: true,
+        isIdle: false,
+        queueId: 'competitive',
+        provisioningFlow: 'Invalid',
         partyId: '00000000-0000-0000-0000-000000000000',
-        partyClientVersion: this.valorantVersion ?? 'unknown',
-        accountLevel: 1000,
+        partySize: 1,
+        maxPartySize: 5,
+        partyOwnerMatchScoreAllyTeam: 0,
+        partyOwnerMatchScoreEnemyTeam: 0,
+        premierPresenceData: {
+          rosterId: '',
+          rosterName: 'Deceive is active. Ignore any version mismatch warnings.',
+          rosterTag: 'Deceive Active!',
+          rosterType: 'VCT',
+          division: 0,
+          score: 0,
+          plating: 0,
+          showAura: false,
+          showTag: true,
+          showPlating: false,
+        },
+        matchPresenceData: {
+          sessionLoopState: 'MENUS',
+          provisioningFlow: 'Invalid',
+          matchMap: '',
+          queueId: 'competitive',
+        },
+        partyPresenceData: {
+          partyId: '00000000-0000-0000-0000-000000000000',
+          isPartyOwner: true,
+          partyState: 'DEFAULT',
+          partyAccessibility: 'CLOSED',
+          partyLFM: false,
+          partyClientVersion: this.valorantVersion ?? 'unknown',
+          partyVersion: 1768830115681,
+          partySize: 1,
+          queueEntryTime: '0001.01.01-00.00.00',
+          isPartyCrossPlayEnabled: false,
+          isPlayerCrossPlayEnabled: false,
+          partyPrecisePlatformTypes: 1,
+          customGameName: 'Deceive Active!',
+          customGameTeam: '',
+          maxPartySize: 5,
+          tournamentId: '',
+          rosterId: '',
+          partyOwnerSessionLoopState: 'MENUS',
+          partyOwnerMatchMap: '',
+          partyOwnerProvisioningFlow: 'Invalid',
+          partyOwnerMatchScoreAllyTeam: 0,
+          partyOwnerMatchScoreEnemyTeam: 0,
+        },
+        playerPresenceData: {
+          playerCardId: '893deca1-4123-9c1f-2985-aa9de74cb512',
+          playerTitleId: 'e3ca05a4-4e44-9afe-3791-7d96ca8f71fa',
+          accountLevel: 999,
+          competitiveTier: 0,
+          leaderboardPosition: 0,
+        },
       })
     ).toString('base64');
 
@@ -257,7 +374,7 @@ export class ProxiedConnection extends EventEmitter {
     } catch {
       // Ignore errors on close
     }
-    this.emit('error', new Error('Connection closed'));
+    this.emit('close');
   }
 
   override on<K extends keyof ProxiedConnectionEvents>(
