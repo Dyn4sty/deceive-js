@@ -3,7 +3,8 @@
 ## App icon
 
 - `app.iconset/` - macOS app icon (all sizes)
-- `icons/app.png` - 512px app icon used for Windows, Linux and the README
+- `icons/app.ico` - Windows app icon (16-256px; Windows doesn't accept larger icons)
+- `icons/app.png` - 512px app icon used for the README
 
 The artwork is cropped from Shaco's default splash art (League of Legends, © Riot Games), served by Riot's [Data Dragon](https://developer.riotgames.com/docs/lol#data-dragon). Shaco's "Deceive" ability is where the original Deceive got its name and icon.
 

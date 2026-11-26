@@ -41,7 +41,8 @@ export default {
     },
     win: {
       bundleCEF: false,
-      icon: 'assets/icons/app.png',
+      // Windows icons max out at 256px; a larger PNG fails with PngTooLarge
+      icon: 'assets/icons/app.ico',
     },
     linux: {
       bundleCEF: false,
@@ -50,6 +51,7 @@ export default {
   },
   scripts: {
     preBuild: './scripts/build-worker.ts',
+    postWrap: './scripts/post-wrap.ts',
   },
   runtime: {
     // Deceive lives in the tray; closing the game picker must not quit the app

@@ -60,6 +60,23 @@
 
 macOS 14 or later is required.
 
+#### Opening Deceive on macOS for the first time
+
+Deceive isn't notarized by Apple, so the first launch is blocked with "Apple could not verify "Deceive" is free of malware". To allow it:
+
+1. Drag **Deceive** from the DMG into **Applications** and try to open it once.
+2. Open **System Settings > Privacy & Security**, scroll down, and click **Open Anyway** next to the message about Deceive.
+
+Or run this once in Terminal:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/Deceive.app
+```
+
+If macOS says the app "is damaged", you downloaded a build from before 2.1.1; download the latest release, or use the command above.
+
+On Windows, SmartScreen may show "Windows protected your PC". Click **More info**, then **Run anyway**.
+
 ### Build from Source
 
 League Deceiver is an [Electrobun](https://electrobun.dev) app. You need [Bun](https://bun.sh) and [Hutch](https://docs.electrobun.dev/electrobun/guides/hutch/), Electrobun's build tool:

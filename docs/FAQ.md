@@ -121,7 +121,7 @@ League Deceiver should work out of the box on Windows 10/11.
 
 ### macOS
 
-macOS 14 or later is required. You may need to allow the application in System Settings > Privacy & Security. Deceive has no Dock icon; look for the jester hat in the menu bar.
+macOS 14 or later is required. Deceive isn't notarized by Apple, so on first launch you need to click **Open Anyway** in System Settings > Privacy & Security (see [Opening Deceive on macOS for the first time](../README.md#opening-deceive-on-macos-for-the-first-time)). Deceive has no Dock icon; look for the jester hat in the menu bar.
 
 ### Linux
 
