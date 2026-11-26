@@ -18,7 +18,7 @@ import { logger } from './utils/logger.js';
 import packageJson from '../package.json' with { type: 'json' };
 
 export const FAQ_URL = 'https://github.com/molenzwiebel/Deceive#faq';
-const ISSUES_URL = 'https://github.com/Dyn4sty/deceive-node/issues';
+const ISSUES_URL = 'https://github.com/Dyn4sty/deceive-js/issues';
 
 // After the client received the patched chat config, it should connect to the proxy quickly
 const CHAT_CONNECT_TIMEOUT_MS = 45_000;

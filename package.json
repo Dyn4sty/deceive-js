@@ -1,7 +1,7 @@
 {
-  "name": "deceive-node",
+  "name": "deceive-js",
   "version": "2.0.0",
-  "description": "Appear offline in League of Legends, VALORANT, and Legends of Runeterra",
+  "description": "Appear offline in League of Legends, TFT, VALORANT, and Legends of Runeterra. A Bun + Electrobun port of Deceive.",
   "type": "module",
   "private": true,
   "scripts": {
@@ -37,7 +37,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/Dyn4sty/deceive-node.git"
+    "url": "https://github.com/Dyn4sty/deceive-js.git"
   },
   "keywords": [
     "league-of-legends",
@@ -46,7 +46,9 @@
     "offline",
     "presence",
     "riot-games",
-    "deceive"
+    "deceive",
+    "bun",
+    "electrobun"
   ],
   "author": "",
   "license": "GPL-3.0",

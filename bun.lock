@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "deceive-node",
+      "name": "deceive-js",
       "dependencies": {
         "conf": "^13.0.1",
         "node-forge": "^1.3.1",

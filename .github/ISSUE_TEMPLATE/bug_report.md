@@ -31,7 +31,7 @@ If applicable, add screenshots to help explain your problem.
 - **OS**: [e.g., Windows 11, macOS Sonoma 14.0, Ubuntu 22.04]
 - **League Deceiver Version**: [e.g., v1.0.0]
 - **Game**: [e.g., League of Legends, VALORANT, Legends of Runeterra]
-- **Node.js Version** (if building from source): [e.g., 20.10.0]
+- **Bun Version** (if building from source): [e.g., 1.4.4]
 
 ## Logs
 

@@ -12,10 +12,10 @@ Riot has [confirmed](https://i.thijsmolendijk.nl/deceive_ok.png) that you won't 
 
 ### How is this different from the original Deceive?
 
-League Deceiver is a TypeScript/Node.js port of the [original Deceive](https://github.com/molenzwiebel/Deceive) which was written in C#. Key differences:
+League Deceiver is a TypeScript port of the [original Deceive](https://github.com/molenzwiebel/Deceive) (written in C#), built on [Bun](https://bun.sh) and [Electrobun](https://electrobun.dev). Key differences:
 
-- **Cross-platform**: Works on Windows, macOS, and Linux
-- **No .NET required**: Uses Node.js instead of .NET Framework
+- **Windows and macOS**: Installers for Windows and for Apple Silicon and Intel Macs
+- **No .NET required**: Uses Bun instead of .NET Framework
 - **Open source**: Same GPL-3.0 license as the original
 
 ## Functionality
@@ -125,16 +125,13 @@ macOS 14 or later is required. You may need to allow the application in System S
 
 ### Linux
 
-Linux support is limited. You'll need:
-
-- A working Wine/Lutris setup
-- The Riot Client accessible in your path
+Linux isn't supported. Riot games don't run natively on Linux, and League Deceiver can't find a Riot Client installed through Wine or Lutris.
 
 ## Updates
 
 ### How do I update League Deceiver?
 
-- **Release**: Download the latest installer from [Releases](https://github.com/Dyn4sty/deceive-node/releases)
+- **Release**: Download the latest installer from [Releases](https://github.com/Dyn4sty/deceive-js/releases)
 - **Source**: Pull the latest changes (`git pull`) and rebuild (`bun install && bun run build`)
 
 ### Will my settings be preserved after updates?

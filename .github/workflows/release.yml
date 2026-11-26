@@ -1,10 +1,23 @@
 name: Release
 
 on:
+  # Called by release-please once it has created a release. Tags created by release-please
+  # use GITHUB_TOKEN, which does not trigger the push event below.
+  workflow_call:
+    inputs:
+      tag:
+        description: Release tag to build and upload to (for example v2.0.0)
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to build and upload to (for example v2.0.0)
+        required: true
+        type: string
   push:
     tags:
       - 'v*'
-  workflow_dispatch:
 
 permissions:
   contents: write
@@ -13,6 +26,8 @@ jobs:
   build-and-release:
     name: Build & Release (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
     strategy:
       fail-fast: false
       matrix:
@@ -20,23 +35,26 @@ jobs:
           # Hutch only builds for the host platform and architecture
           - name: macOS (Apple Silicon)
             os: macos-latest
+            files: artifacts/*.dmg
           - name: macOS (Intel)
             os: macos-15-intel
+            files: artifacts/*.dmg
           - name: Windows
             os: windows-latest
-          - name: Linux
-            os: ubuntu-latest
+            files: artifacts/*-Setup.zip
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
 
-      - name: Install Hutch (macOS/Linux)
+      - name: Install Hutch (macOS)
         if: runner.os != 'Windows'
         run: |
           curl -fsSL https://hutch.blackboard.sh/hutch/install.sh | sh
@@ -58,11 +76,9 @@ jobs:
       - name: Upload Release Assets
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            artifacts/*.dmg
-            artifacts/*-Setup.zip
-            artifacts/*-Setup.tar.gz
-          fail_on_unmatched_files: false
+          tag_name: ${{ env.TAG }}
+          files: ${{ matrix.files }}
+          fail_on_unmatched_files: true
           draft: false
           prerelease: false
         env:

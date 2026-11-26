@@ -19,7 +19,7 @@ When you are creating a bug report, please include as many details as possible:
 - **Provide specific examples** to demonstrate the steps
 - **Describe the behavior you observed** and what behavior you expected
 - **Include logs** if applicable
-- **Include your environment** (OS, Node.js version, League Deceiver version)
+- **Include your environment** (OS, Bun version, League Deceiver version)
 
 ### Suggesting Enhancements
 
@@ -50,8 +50,8 @@ Enhancement suggestions are tracked as GitHub issues. When creating an enhanceme
 
 ```bash
 # Clone your fork
-git clone https://github.com/YOUR_USERNAME/deceive-node.git
-cd deceive-node
+git clone https://github.com/YOUR_USERNAME/deceive-js.git
+cd deceive-js
 
 # Install dependencies
 bun install
@@ -197,7 +197,7 @@ BREAKING CHANGE: Config file format has changed. See migration guide.
 ## Getting Help
 
 - Check the [FAQ](FAQ.md)
-- Search existing [issues](https://github.com/Dyn4sty/deceive-node/issues)
+- Search existing [issues](https://github.com/Dyn4sty/deceive-js/issues)
 - Open a new issue if needed
 
 ## Recognition

@@ -5,7 +5,8 @@
 <h1 align="center">League Deceiver</h1>
 
 <p align="center">
-  <strong>🎩 Appear offline in League of Legends, VALORANT, and Legends of Runeterra</strong>
+  <strong>🎩 Appear offline in League of Legends, TFT, VALORANT, and Legends of Runeterra</strong><br/>
+  A <a href="https://bun.sh">Bun</a> + <a href="https://electrobun.dev">Electrobun</a> port of <a href="https://github.com/molenzwiebel/Deceive">Deceive</a>
 </p>
 
 <p align="center">
@@ -18,24 +19,24 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Dyn4sty/deceive-node/releases">
-    <img src="https://img.shields.io/github/v/release/Dyn4sty/deceive-node?style=flat-square" alt="Release"/>
+  <a href="https://github.com/Dyn4sty/deceive-js/releases">
+    <img src="https://img.shields.io/github/v/release/Dyn4sty/deceive-js?style=flat-square" alt="Release"/>
   </a>
-  <a href="https://github.com/Dyn4sty/deceive-node/blob/main/LICENSE">
-    <img src="https://img.shields.io/github/license/Dyn4sty/deceive-node?style=flat-square" alt="License"/>
+  <a href="https://github.com/Dyn4sty/deceive-js/blob/main/LICENSE">
+    <img src="https://img.shields.io/github/license/Dyn4sty/deceive-js?style=flat-square" alt="License"/>
   </a>
-  <a href="https://github.com/Dyn4sty/deceive-node/releases">
-    <img src="https://img.shields.io/github/downloads/Dyn4sty/deceive-node/total?style=flat-square" alt="Downloads"/>
+  <a href="https://github.com/Dyn4sty/deceive-js/releases">
+    <img src="https://img.shields.io/github/downloads/Dyn4sty/deceive-js/total?style=flat-square" alt="Downloads"/>
   </a>
-  <a href="https://github.com/Dyn4sty/deceive-node/actions/workflows/ci.yml">
-    <img src="https://img.shields.io/github/actions/workflow/status/Dyn4sty/deceive-node/ci.yml?style=flat-square" alt="CI"/>
+  <a href="https://github.com/Dyn4sty/deceive-js/actions/workflows/ci.yml">
+    <img src="https://img.shields.io/github/actions/workflow/status/Dyn4sty/deceive-js/ci.yml?style=flat-square" alt="CI"/>
   </a>
 </p>
 
 ---
 
 > [!CAUTION]
-> The `deceive.gg` and `deceive.app` websites are **UNRELATED** to this project and to the original [Deceive](https://github.com/molenzwiebel/Deceive). The download on `deceive.app` **CONTAINS MALWARE**. Only download League Deceiver from the [Releases](https://github.com/Dyn4sty/deceive-node/releases) page.
+> The `deceive.gg` and `deceive.app` websites are **UNRELATED** to this project and to the original [Deceive](https://github.com/molenzwiebel/Deceive). The download on `deceive.app` **CONTAINS MALWARE**. Only download League Deceiver from the [Releases](https://github.com/Dyn4sty/deceive-js/releases) page.
 
 ## Features
 
@@ -43,19 +44,18 @@
 - 💬 **Full Functionality** - Chat in lobbies, queue with friends, and send invites normally
 - 🎮 **Multi-Game Support** - Works with League of Legends, Teamfight Tactics, VALORANT, Legends of Runeterra, and 2XKO
 - 📱 **Mobile Status** - Optionally appear as if you're on the mobile app
-- 🖥️ **Cross-Platform** - Available for Windows, macOS, and Linux
+- 🖥️ **Windows and macOS** - Native installers for Windows and for Apple Silicon and Intel Macs, built with [Bun](https://bun.sh) and [Electrobun](https://electrobun.dev)
 - 🔒 **Safe to Use** - [Riot has confirmed](https://i.thijsmolendijk.nl/deceive_ok.png) you won't get banned for using Deceive
 
 ## Installation
 
 ### Download
 
-1. Go to the [Releases](https://github.com/Dyn4sty/deceive-node/releases) page
+1. Go to the [Releases](https://github.com/Dyn4sty/deceive-js/releases) page
 2. Download the installer for your system:
    - **macOS (Apple Silicon)**: `macos-arm64-Deceive.dmg`
    - **macOS (Intel)**: `macos-x64-Deceive.dmg`
    - **Windows**: `win-x64-Deceive-Setup.zip`
-   - **Linux**: `linux-x64-Deceive-Setup.tar.gz`
 3. Install and open **Deceive**
 
 macOS 14 or later is required.
@@ -67,8 +67,8 @@ League Deceiver is an [Electrobun](https://electrobun.dev) app. You need [Bun](h
 ```bash
 curl -fsSL https://hutch.blackboard.sh/hutch/install.sh | sh
 
-git clone https://github.com/Dyn4sty/deceive-node.git
-cd deceive-node
+git clone https://github.com/Dyn4sty/deceive-js.git
+cd deceive-js
 bun install
 
 # Run in development (rebuilds on change)
@@ -86,7 +86,7 @@ Open Deceive. Like the original Deceive, it has no main window:
 
 1. If the Riot Client is already running, Deceive asks to stop it, because it has to start the Riot Client itself to mask your status.
 2. A small window asks which game to launch. Tick **Remember my choice** to skip it next time.
-3. Deceive launches the game and lives in the menu bar (macOS) or system tray (Windows/Linux).
+3. Deceive launches the game and lives in the menu bar (macOS) or system tray (Windows).
 
 Logs are written to `deceive.log` in the app's log folder. Use **Open Logs Folder** in the menu to find it.
 
@@ -145,7 +145,7 @@ For more technical details, see [TECHNICAL_OVERVIEW.md](docs/TECHNICAL_OVERVIEW.
 
 ### Where can I download League Deceiver?
 
-Click the [Releases](https://github.com/Dyn4sty/deceive-node/releases) tab to download the latest version.
+Click the [Releases](https://github.com/Dyn4sty/deceive-js/releases) tab to download the latest version.
 
 ### Can I still invite people? Can they invite me?
 
@@ -169,7 +169,7 @@ League Deceiver needs to launch the Riot Client with special parameters to redir
 
 ### How do I solve the "failing to resolve" warning for deceive-localhost.molenzwiebel.xyz?
 
-League Deceiver points the Riot Client's chat connection at `deceive-localhost.molenzwiebel.xyz`, which normally resolves to your own computer (`127.0.0.1`), and serves a valid certificate for that domain. Some networks, ISPs, and school or work DNS servers don't resolve it. Switch your DNS to something like [Cloudflare's 1.1.1.1](https://developers.cloudflare.com/1.1.1.1/setup/) or [Google's 8.8.8.8](https://developers.google.com/speed/public-dns/docs/using), or add `127.0.0.1 deceive-localhost.molenzwiebel.xyz` to your hosts file (`/etc/hosts` on macOS and Linux, `C:\Windows\System32\drivers\etc\hosts` on Windows). Both options need administrator access.
+League Deceiver points the Riot Client's chat connection at `deceive-localhost.molenzwiebel.xyz`, which normally resolves to your own computer (`127.0.0.1`), and serves a valid certificate for that domain. Some networks, ISPs, and school or work DNS servers don't resolve it. Switch your DNS to something like [Cloudflare's 1.1.1.1](https://developers.cloudflare.com/1.1.1.1/setup/) or [Google's 8.8.8.8](https://developers.google.com/speed/public-dns/docs/using), or add `127.0.0.1 deceive-localhost.molenzwiebel.xyz` to your hosts file (`/etc/hosts` on macOS, `C:\Windows\System32\drivers\etc\hosts` on Windows). Both options need administrator access.
 
 ## Contributing
 

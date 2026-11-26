@@ -175,11 +175,6 @@ League Deceiver generates a self-signed TLS certificate for intercepting chat tr
 - Configuration: `~/Library/Application Support/league-deceiver/config.json`
 - Certificate: `~/Library/Application Support/league-deceiver/deceive-cert.pem`
 
-### Linux
-
-- Configuration: `~/.config/league-deceiver/config.json`
-- Certificate: `~/.config/league-deceiver/deceive-cert.pem`
-
 ## Riot Client Launch Parameters
 
 League Deceiver launches the Riot Client with these parameters:
