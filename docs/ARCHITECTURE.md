@@ -2,8 +2,16 @@
 
 This document describes the high-level architecture of League Deceiver.
 
-League Deceiver is an [Electrobun](https://electrobun.dev) desktop app. Its main process runs on Bun and
-owns the proxies, the native tray and the dialogs. The only web content is the small game picker window.
+League Deceiver is an [Electrobun](https://electrobun.dev) desktop app with two threads:
+
+- **Main thread** (`src/bun/index.ts`): native tray, dialogs, game picker window, settings, launching and
+  watching the Riot Client. Electrobun's message boxes are synchronous, so this thread stops while one is open.
+- **Proxy worker** (`src/proxy/worker.ts`, a Bun Worker): the config proxy and the chat TLS proxy. Keeping the
+  sockets here means chat keeps flowing while a dialog is open. The worker never touches the settings store;
+  it gets initial values from the main thread and reports changes back (`src/shared/worker-protocol.ts`).
+
+The worker is bundled separately by the `preBuild` hook (`scripts/build-worker.ts`) and copied into the app
+as `app/worker/proxy-worker.js`. The only web content is the small game picker window.
 
 ## Module Structure
 
@@ -16,8 +24,13 @@ src/
 ├── types.ts                  # Types and enums
 │
 ├── proxy/
+│   ├── worker.ts             # Proxy worker entry point
+│   ├── proxy-client.ts       # Main-thread handle for the worker
 │   ├── config-proxy.ts       # HTTP proxy for the Riot client configuration
 │   ├── proxied-connection.ts # Per-connection XMPP proxy, presence rewriting
+│   ├── stanza-splitter.ts    # Splits the XMPP stream into complete stanzas
+│   ├── socket-writer.ts      # Write queue (Bun sockets do not buffer)
+│   ├── constants.ts          # Localhost domain
 │   └── certificate.ts        # Trusted localhost certificate (with self-signed fallback)
 │
 ├── launcher/
@@ -30,7 +43,9 @@ src/
 │   └── picker.ts             # Game picker window (main-process side)
 │
 ├── views/picker/             # Game picker web view (HTML, CSS, TS)
-├── shared/rpc.ts             # Typed RPC schema between main process and picker
+├── shared/
+│   ├── rpc.ts                # Typed RPC schema between main process and picker
+│   └── worker-protocol.ts    # Messages between main thread and proxy worker
 │
 ├── config/
 │   └── config.ts             # Persistent settings (conf)
@@ -58,20 +73,19 @@ flowchart TB
         PickerView["views/picker"]
     end
 
-    subgraph Core [Core]
+    subgraph Core [Main thread core]
         Startup["startup.ts"]
-        Controller["controller.ts"]
-    end
-
-    subgraph Proxy [Proxy layer]
-        ConfigProxy["config-proxy.ts"]
-        ProxiedConn["proxied-connection.ts"]
+        Client["proxy/proxy-client.ts"]
         Cert["certificate.ts"]
-    end
-
-    subgraph Launcher [Launcher]
         GameLauncher["game-launcher.ts"]
         ProcessMgr["process-manager.ts"]
+    end
+
+    subgraph WorkerThread [Proxy worker]
+        WorkerEntry["proxy/worker.ts"]
+        Controller["controller.ts"]
+        ConfigProxy["config-proxy.ts"]
+        ProxiedConn["proxied-connection.ts"]
     end
 
     Main --> Startup
@@ -79,13 +93,15 @@ flowchart TB
     Startup -->|StartupUI| Dialogs
     Dialogs --> Picker
     Picker <-->|"typed RPC"| PickerView
-    Startup --> Controller
-    Startup --> ConfigProxy
+    Startup --> Cert
     Startup --> GameLauncher
     Startup --> ProcessMgr
+    Startup --> Client
+    Client <-->|postMessage| WorkerEntry
+    WorkerEntry --> Controller
+    WorkerEntry --> ConfigProxy
     Controller --> ProxiedConn
-    Controller -->|onStateChange| Tray
-    Startup --> Cert
+    Client -->|state| Tray
 ```
 
 ## Startup Sequence
@@ -97,8 +113,7 @@ sequenceDiagram
     participant Startup
     participant UI as Dialogs and picker
     participant ProcessMgr as Process manager
-    participant Controller
-    participant ConfigProxy as Config proxy
+    participant Worker as Proxy worker
 
     User->>Main: Open Deceive
     Main->>Main: Hide Dock icon, single-instance lock, create tray
@@ -110,13 +125,22 @@ sequenceDiagram
     end
     Startup->>UI: pickGame() unless a game is remembered
     Startup->>Startup: loadCertificate()
-    Startup->>Controller: new MainController(status), startChatListener()
-    Startup->>ConfigProxy: start()
+    Startup->>Worker: start (status, settings, certificate)
+    Worker-->>Startup: started (chat port, config port)
     Startup->>ProcessMgr: launch Riot Client, watch for exit
-    Startup->>UI: notify("Deceive is running")
     Startup-->>Main: DeceiveSession
-    Main->>Controller: onStateChange(tray.update)
+    Main->>Worker: state changes update the tray
+    Worker-->>Startup: chatConnected
+    Startup->>UI: notify("Deceive is active")
 ```
+
+## Stream Handling
+
+TLS reads can end in the middle of a stanza or a multi-byte character. Both directions go through a
+`StanzaSplitter`, and only complete top-level stanzas are inspected and forwarded. A presence is never
+forwarded before it has been rewritten, and a presence that fails to rewrite is dropped rather than sent
+unmodified. Writes go through a `SocketWriter`, which queues whatever the socket did not accept and
+flushes it on `drain`.
 
 ## Presence Modification Flow
 

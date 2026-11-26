@@ -4,6 +4,7 @@ node_modules/
 # Build output
 dist/
 build/
+build-generated/
 artifacts/
 .hutch/
 .cottontail-tmp/

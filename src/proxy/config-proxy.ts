@@ -8,13 +8,15 @@
 import { EventEmitter } from 'events';
 import { ChatServerConfig } from '../types.js';
 import { logger } from '../utils/logger.js';
-import { LOCALHOST_DOMAIN } from './certificate.js';
+import { LOCALHOST_DOMAIN } from './constants.js';
 
 const CONFIG_URL = 'https://clientconfig.rpg.riotgames.com';
 const GEO_PAS_URL = 'https://riot-geo.pas.si.riotgames.com/pas/v1/service/chat';
 
 interface ConfigProxyEvents {
   patchedChatServer: (config: ChatServerConfig) => void;
+  /** A successful config response could not be rewritten, so chat bypasses Deceive */
+  rewriteFailed: (message: string) => void;
 }
 
 export class ConfigProxy extends EventEmitter {
@@ -167,7 +169,7 @@ export class ConfigProxy extends EventEmitter {
         }
       } catch (err) {
         logger.error('Failed to parse/modify config:', err);
-        // Return original content on error
+        this.emit('rewriteFailed', err instanceof Error ? err.message : String(err));
       }
 
       return new Response(modifiedContent, {

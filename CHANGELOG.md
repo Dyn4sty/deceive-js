@@ -30,6 +30,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Bug Fixes
 
 - Detecting a running Riot Client matched unrelated processes (for example `ColorSync` contains `lor`)
+- A presence split across network reads could be forwarded without being rewritten, revealing your real status
+- Data could be lost when a chat socket was full (Bun sockets do not buffer writes)
+- Chat stopped flowing while a dialog was open; the proxies now run in a separate worker thread
+- A failed config rewrite silently left your status unmasked; Deceive now warns, and only reports itself active once chat is connected through it
+- Changing status could resend other messages that arrived together with your last presence
+- Re-enabling Deceive resent an outdated presence
+- Connections that closed while being set up, or after Deceive stopped, were kept open
+- A still-valid cached certificate was replaced by the self-signed fallback when refreshing it failed
+- "Restart and Launch a Different Game" could report the Riot Client as still running
+- The single-instance lock could block launching after a crash if the old process ID was reused
+- Errors starting the Riot Client, or a Riot Client that never starts, are now reported
+- Uncaught errors are now written to the log
 
 ## [1.2.0](https://github.com/Dyn4sty/deceive-node/compare/v1.1.0...v1.2.0) (2026-11-13)
 

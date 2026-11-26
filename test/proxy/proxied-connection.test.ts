@@ -3,32 +3,48 @@
  */
 
 import { describe, it, expect } from 'bun:test';
-import type { Socket } from 'bun';
-import { ProxiedConnection } from '../../src/proxy/proxied-connection.js';
-import type { MainController } from '../../src/controller.js';
+import {
+  FAKE_PLAYER_JID,
+  ProxiedConnection,
+  type PresenceHost,
+  type ProxySocket,
+} from '../../src/proxy/proxied-connection.js';
 import { PresenceStatus } from '../../src/types.js';
 
-type SocketData = { proxiedConnection?: ProxiedConnection };
-
 function setup(status: PresenceStatus, connectToMuc = true) {
-  const written: string[] = [];
-  const outgoing = {
-    write: (data: Buffer | Uint8Array) => written.push(Buffer.from(data).toString('utf-8')),
+  const toServer: string[] = [];
+  const toClient: string[] = [];
+  const messages: string[] = [];
+  const socket = (sink: string[]): ProxySocket => ({
+    write: (data: Uint8Array) => {
+      sink.push(Buffer.from(data).toString('utf-8'));
+      return data.length;
+    },
     end: () => {},
-  } as unknown as Socket<SocketData>;
-  const incoming = { write: () => 0, end: () => {} } as unknown as Socket<SocketData>;
-  const controller = {
-    isEnabled: () => true,
-    getStatus: () => status,
+  });
+  const host = {
+    enabled: true,
+    status,
+    isEnabled() {
+      return this.enabled;
+    },
+    getStatus() {
+      return this.status;
+    },
     shouldConnectToMuc: () => connectToMuc,
-    handleChatMessage: () => {},
-  } as unknown as MainController;
+    handleChatMessage: (text: string) => messages.push(text),
+  } satisfies PresenceHost & { enabled: boolean; status: PresenceStatus };
 
-  const connection = new ProxiedConnection(controller, incoming, outgoing);
+  const connection = new ProxiedConnection(host, socket(toClient), socket(toServer));
   return {
+    host,
+    connection,
+    messages,
+    toServer: () => toServer.join(''),
+    toClient: () => toClient.join(''),
     send: (xml: string) => {
       connection.handleIncomingData(Buffer.from(xml, 'utf-8'));
-      return written.join('');
+      return toServer.join('');
     },
   };
 }
@@ -80,5 +96,66 @@ describe('ProxiedConnection presence rewriting', () => {
     const muc = "<presence to='lobby@champ-select.pvp.net/me'><show>chat</show></presence>";
     expect(setup(PresenceStatus.Offline, true).send(muc)).toBe(muc);
     expect(setup(PresenceStatus.Offline, false).send(muc)).toBe('');
+  });
+});
+
+describe('ProxiedConnection stream handling', () => {
+  it('never forwards a presence split across reads before rewriting it', () => {
+    const conn = setup(PresenceStatus.Offline);
+    const cut = PRESENCE.indexOf('<league_of_legends>') + 10;
+
+    expect(conn.send(PRESENCE.slice(0, cut))).toBe('');
+    const out = conn.send(PRESENCE.slice(cut));
+    expect(out).toContain('<show>offline</show>');
+    expect(out).not.toContain('inGame');
+    expect(out).not.toContain('hello');
+  });
+
+  it('handles several stanzas and multi-byte characters split across reads', () => {
+    const conn = setup(PresenceStatus.Offline);
+    const message = "<message to='friend@pvp.net' type='chat'><body>héllo 👋</body></message>";
+    const bytes = Buffer.from(message + PRESENCE, 'utf-8');
+    const emoji = bytes.indexOf(Buffer.from('👋')) + 2;
+
+    conn.connection.handleIncomingData(bytes.subarray(0, emoji));
+    conn.connection.handleIncomingData(bytes.subarray(emoji));
+    expect(conn.toServer()).toStartWith(message);
+    expect(conn.toServer()).toContain('<show>offline</show>');
+  });
+
+  it('only resends the presence itself on status change', () => {
+    const conn = setup(PresenceStatus.Offline);
+    const message = "<message to='friend@pvp.net' type='chat'><body>hi</body></message>";
+    conn.send(message + PRESENCE);
+    const before = conn.toServer().length;
+
+    conn.host.status = PresenceStatus.Mobile;
+    conn.connection.updateStatus(PresenceStatus.Mobile);
+    const resent = conn.toServer().slice(before);
+    expect(resent).toContain('<show>mobile</show>');
+    expect(resent).not.toContain('<message');
+  });
+
+  it('remembers presences sent while disabled', () => {
+    const conn = setup(PresenceStatus.Offline);
+    conn.send(PRESENCE);
+    conn.host.enabled = false;
+    conn.send(PRESENCE.replace('inGame', 'championSelect'));
+    const before = conn.toServer().length;
+
+    conn.host.enabled = true;
+    conn.connection.updateStatus(PresenceStatus.Mobile);
+    conn.host.status = PresenceStatus.Mobile;
+    const resent = conn.toServer().slice(before);
+    expect(resent).toContain('<show>mobile</show>');
+    expect(resent).not.toContain('inGame');
+  });
+
+  it('handles chat commands sent to the fake player without forwarding them', () => {
+    const conn = setup(PresenceStatus.Offline);
+    const command = `<message to='${FAKE_PLAYER_JID}' type='chat'><body>Mobile</body></message>`;
+    const other = "<iq type='get' id='1'/>";
+    expect(conn.send(command + other)).toBe(other);
+    expect(conn.messages).toEqual(['Mobile']);
   });
 });

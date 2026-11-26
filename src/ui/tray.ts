@@ -42,6 +42,7 @@ export class DeceiveTray {
   private tray: Tray;
   private state: ControllerState | null = null;
   private iconStatus: PresenceStatus = PresenceStatus.Offline;
+  private lastMenu = '';
 
   constructor(private callbacks: TrayCallbacks) {
     this.tray = new Tray({
@@ -153,7 +154,12 @@ export class DeceiveTray {
       { type: 'separator' },
       { type: 'normal', label: 'Quit', action: 'quit' },
     ];
-    this.tray.setMenu(menu);
+    // Every setMenu stores per-item data in Electrobun that is only released on click
+    const serialized = JSON.stringify(menu);
+    if (serialized !== this.lastMenu) {
+      this.lastMenu = serialized;
+      this.tray.setMenu(menu);
+    }
     if (isMac) return;
 
     const iconStatus = state

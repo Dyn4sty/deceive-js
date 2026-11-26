@@ -14,8 +14,9 @@ import { join } from 'path';
 import { getDataDir } from '../config/config.js';
 import { logger } from '../utils/logger.js';
 import packageJson from '../../package.json' with { type: 'json' };
+import { LOCALHOST_DOMAIN } from './constants.js';
 
-export const LOCALHOST_DOMAIN = 'deceive-localhost.molenzwiebel.xyz';
+export { LOCALHOST_DOMAIN };
 const CERTIFICATE_URL = 'https://mln.cx/deceive/localhost.pfx';
 const MIN_VALIDITY_MS = 20 * 24 * 60 * 60 * 1000;
 
@@ -74,17 +75,19 @@ function getExpiry(certificatePem: string): Date {
   return new Date(new X509Certificate(certificatePem).validTo);
 }
 
-function loadCachedPfx(path: string): CertificateResult | null {
+/**
+ * Load the cached certificate, if it is still valid
+ */
+function loadCachedPfx(path: string): { result: CertificateResult; expiry: Date } | null {
   if (!existsSync(path)) return null;
   try {
     const pem = pfxToPem(readFileSync(path));
     const expiry = getExpiry(pem.certificate);
-    if (expiry.getTime() - Date.now() < MIN_VALIDITY_MS) {
-      logger.debug(`Cached certificate expires ${expiry.toISOString()}, refreshing`);
+    if (expiry.getTime() <= Date.now()) {
+      logger.debug(`Cached certificate expired ${expiry.toISOString()}`);
       return null;
     }
-    logger.debug(`Using cached certificate, valid until ${expiry.toISOString()}`);
-    return { ...pem, trusted: true };
+    return { result: { ...pem, trusted: true }, expiry };
   } catch (err) {
     logger.debug(
       `Failed to load cached certificate: ${err instanceof Error ? err.message : String(err)}`
@@ -182,12 +185,25 @@ function getSelfSigned(): CertificateResult {
 export async function loadCertificate(): Promise<CertificateResult> {
   const pfxPath = join(getDataDir(), CACHED_PFX_FILENAME);
 
-  cachedCertificate = loadCachedPfx(pfxPath);
-  if (cachedCertificate) return cachedCertificate;
+  const cached = loadCachedPfx(pfxPath);
+  if (cached && cached.expiry.getTime() - Date.now() >= MIN_VALIDITY_MS) {
+    logger.debug(`Using cached certificate, valid until ${cached.expiry.toISOString()}`);
+    cachedCertificate = cached.result;
+    return cachedCertificate;
+  }
 
   try {
     cachedCertificate = await downloadPfx(pfxPath);
   } catch (err) {
+    if (cached) {
+      // Refreshing failed, but the cached certificate still works for now
+      logger.warn(
+        `Unable to refresh the chat proxy certificate (${err instanceof Error ? err.message : String(err)}). ` +
+          `Using the cached certificate, valid until ${cached.expiry.toISOString()}.`
+      );
+      cachedCertificate = cached.result;
+      return cachedCertificate;
+    }
     logger.warn(
       `Unable to download the chat proxy certificate (${err instanceof Error ? err.message : String(err)}). ` +
         'Check your network connection or whether a new version is available. ' +

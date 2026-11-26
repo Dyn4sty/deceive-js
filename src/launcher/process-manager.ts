@@ -2,11 +2,14 @@
  * Process Manager - Detect and manage game processes
  */
 
-import { execSync, spawnSync } from 'child_process';
+import { execFile, spawnSync } from 'child_process';
 import { existsSync, readFileSync } from 'fs';
 import { basename, join } from 'path';
+import { promisify } from 'util';
 import { isWindows, isMacOS } from '../utils/platform.js';
 import { logger } from '../utils/logger.js';
+
+const execFileAsync = promisify(execFile);
 
 const PROCESS_NAMES = ['RiotClientServices', 'LeagueClient', 'LoR', 'VALORANT-Win64-Shipping'];
 
@@ -19,35 +22,73 @@ export function processBaseName(processPath: string): string {
     .toLowerCase();
 }
 
-function isRunning(names: string[]): boolean {
+async function isRunning(names: string[]): Promise<boolean> {
   const wanted = new Set(names.map((name) => name.toLowerCase()));
-  return getRunningProcesses().some((p) => wanted.has(processBaseName(p)));
+  return (await getRunningProcesses()).some((p) => wanted.has(processBaseName(p)));
 }
 
 /**
  * Check if any Riot client processes are running
  */
-export function isClientRunning(): boolean {
+export function isClientRunning(): Promise<boolean> {
   return isRunning(PROCESS_NAMES);
 }
 
 /**
- * Get list of running processes
+ * Wait until no Riot client processes are running. Resolves false on timeout.
  */
-function getRunningProcesses(): string[] {
+export async function waitForClientExit(timeoutMs = 10_000, pollMs = 250): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!(await isClientRunning())) return true;
+    await new Promise((resolve) => setTimeout(resolve, pollMs));
+  }
+  return !(await isClientRunning());
+}
+
+/**
+ * Get list of running processes (executable names or paths), without blocking the event loop
+ */
+async function getRunningProcesses(): Promise<string[]> {
   try {
     if (isWindows()) {
-      const result = execSync('tasklist /fo csv /nh', { encoding: 'utf-8' });
-      return result
+      const { stdout } = await execFileAsync('tasklist', ['/fo', 'csv', '/nh'], {
+        encoding: 'utf-8',
+        maxBuffer: 16 * 1024 * 1024,
+        windowsHide: true,
+      });
+      return stdout
         .split('\n')
         .map((line) => line.split(',')[0]?.replace(/"/g, '') ?? '')
         .filter(Boolean);
-    } else {
-      const result = execSync('ps -A -o comm=', { encoding: 'utf-8' });
-      return result.split('\n').filter(Boolean);
     }
+    const { stdout } = await execFileAsync('ps', ['-A', '-o', 'comm='], {
+      encoding: 'utf-8',
+      maxBuffer: 16 * 1024 * 1024,
+    });
+    return stdout.split('\n').filter(Boolean);
   } catch {
     return [];
+  }
+}
+
+/**
+ * Executable of a process by PID, or null if it is not running
+ */
+export function getProcessExecutable(pid: number): string | null {
+  try {
+    if (isWindows()) {
+      const result = spawnSync('tasklist', ['/fi', `PID eq ${pid}`, '/fo', 'csv', '/nh'], {
+        encoding: 'utf-8',
+        windowsHide: true,
+      });
+      const name = result.stdout.split('\n')[0]?.split(',')[0]?.replace(/"/g, '').trim();
+      return name && !name.startsWith('INFO:') ? name : null;
+    }
+    const result = spawnSync('ps', ['-p', String(pid), '-o', 'comm='], { encoding: 'utf-8' });
+    return result.status === 0 ? result.stdout.trim() || null : null;
+  } catch {
+    return null;
   }
 }
 
@@ -139,40 +180,77 @@ function getLinuxRiotClientPath(): string | null {
 }
 
 /**
- * Get the currently running Riot Client process
+ * Whether the Riot Client (RiotClientServices) is running
  */
-export function getRiotClientProcess(): string | null {
-  return getRunningProcesses().find((p) => processBaseName(p) === 'riotclientservices') ?? null;
+export async function isRiotClientRunning(): Promise<boolean> {
+  return (await getRunningProcesses()).some((p) => processBaseName(p) === 'riotclientservices');
+}
+
+export interface WatchOptions {
+  /** Called once the Riot Client exited and did not relaunch itself within graceMs */
+  onExit: () => void;
+  /** Called if the Riot Client is not seen running within startTimeoutMs */
+  onNeverStarted?: () => void;
+  graceMs?: number;
+  pollMs?: number;
+  startTimeoutMs?: number;
 }
 
 /**
- * Call onExit once the Riot Client has exited and did not relaunch itself within the grace period.
- * Watching only starts after the client has been seen running.
+ * Watch the Riot Client process. Returns a function that stops watching.
  */
-export function watchRiotClientExit(onExit: () => void, graceMs = 3000, pollMs = 2000): () => void {
+export function watchRiotClientExit({
+  onExit,
+  onNeverStarted,
+  graceMs = 3000,
+  pollMs = 2000,
+  startTimeoutMs = 60_000,
+}: WatchOptions): () => void {
+  const startedAt = Date.now();
   let seenRunning = false;
-  let checking = false;
+  let stopped = false;
+  let timer: ReturnType<typeof setTimeout> | null = null;
 
-  const timer = setInterval(() => {
-    if (checking) return;
-    if (getRiotClientProcess()) {
+  const schedule = (ms: number) => {
+    if (!stopped) timer = setTimeout(() => void check(), ms);
+  };
+
+  const check = async () => {
+    if (stopped) return;
+    if (await isRiotClientRunning()) {
       seenRunning = true;
+      schedule(pollMs);
       return;
     }
-    if (!seenRunning) return;
+    if (stopped) return;
 
-    checking = true;
-    logger.debug('Detected Riot Client exit, waiting to see if it relaunches');
-    setTimeout(() => {
-      checking = false;
-      if (getRiotClientProcess()) {
-        logger.debug('Riot Client relaunched, continuing to monitor');
-        return;
+    if (!seenRunning) {
+      if (Date.now() - startedAt > startTimeoutMs) {
+        stopped = true;
+        onNeverStarted?.();
+      } else {
+        schedule(pollMs);
       }
-      clearInterval(timer);
-      onExit();
-    }, graceMs);
-  }, pollMs);
+      return;
+    }
 
-  return () => clearInterval(timer);
+    logger.debug('Detected Riot Client exit, waiting to see if it relaunches');
+    await new Promise((resolve) => setTimeout(resolve, graceMs));
+    if (stopped) return;
+    if (await isRiotClientRunning()) {
+      logger.debug('Riot Client relaunched, continuing to monitor');
+      schedule(pollMs);
+      return;
+    }
+    if (stopped) return;
+    stopped = true;
+    onExit();
+  };
+
+  schedule(pollMs);
+
+  return () => {
+    stopped = true;
+    if (timer) clearTimeout(timer);
+  };
 }

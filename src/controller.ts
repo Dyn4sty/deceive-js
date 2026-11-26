@@ -1,17 +1,16 @@
 /**
  * Main Controller - Manages chat proxy connections and status
  *
- * Uses Bun's native TLS APIs for better performance.
- * Implements data buffering to handle the race condition where the Riot Client
- * sends data before the outgoing connection to the chat server is established.
+ * Runs inside the proxy worker. It owns no persistent settings: the initial values come from
+ * the main thread and changes are reported back through ControllerEvents.
+ *
+ * Incoming data is buffered until the outgoing connection to the chat server is established.
  */
 
 import type { Socket, TCPSocketListener } from 'bun';
 import { PresenceStatus, statusLabel } from './types.js';
-import { ProxiedConnection } from './proxy/proxied-connection.js';
-import { getCertificate } from './proxy/certificate.js';
+import { ProxiedConnection, type PresenceHost } from './proxy/proxied-connection.js';
 import { logger } from './utils/logger.js';
-import { config, saveLastStatus } from './config/config.js';
 
 /**
  * Socket data attached to both incoming and outgoing sockets.
@@ -20,6 +19,8 @@ import { config, saveLastStatus } from './config/config.js';
 type SocketData = {
   proxiedConnection?: ProxiedConnection;
   pendingData?: Buffer[];
+  /** Set when the incoming socket closes before its proxied connection exists */
+  closed?: boolean;
 };
 
 export interface ControllerState {
@@ -28,56 +29,58 @@ export interface ControllerState {
   connectToMuc: boolean;
 }
 
-export class MainController {
+export interface ControllerEvents {
+  onStateChange(state: ControllerState): void;
+  onIntroductionShown(): void;
+  onChatConnected(): void;
+  onChatServerUnreachable(): void;
+  /** No chat connections for IDLE_SHUTDOWN_MS */
+  onIdle(): void;
+}
+
+export interface ControllerOptions {
+  status: PresenceStatus;
+  connectToMuc: boolean;
+  introductionShown: boolean;
+  certificate: { certificate: string; privateKey: string };
+  events: ControllerEvents;
+}
+
+const IDLE_SHUTDOWN_MS = 60_000;
+
+export class MainController implements PresenceHost {
   private status: PresenceStatus;
   private enabled = true;
   private connectToMuc: boolean;
+  private introductionShown: boolean;
+  private certificate: ControllerOptions['certificate'];
+  private events: ControllerEvents;
   private connections: ProxiedConnection[] = [];
   private shutdownTimer: ReturnType<typeof setTimeout> | null = null;
-  private sentIntroductionText = false;
+  private introductionTimer: ReturnType<typeof setTimeout> | null = null;
+  private configWaiters = new Set<ReturnType<typeof setInterval>>();
+  private pendingOutgoing = new Set<Socket<SocketData>>();
   private chatServer: TCPSocketListener<SocketData> | null = null;
   private chatHost: string = '';
   private chatPort: number = 0;
   private stopped = false;
-  private onQuit: () => void = () => process.exit(0);
-  private stateListeners: ((state: ControllerState) => void)[] = [];
-  private chatUnreachableHandler: (() => void) | null = null;
 
-  constructor(initialStatus: PresenceStatus) {
-    this.status = initialStatus;
-    this.connectToMuc = config.get('connectToMuc');
-    saveLastStatus(initialStatus);
+  constructor(options: ControllerOptions) {
+    this.status = options.status;
+    this.connectToMuc = options.connectToMuc;
+    this.introductionShown = options.introductionShown;
+    this.certificate = options.certificate;
+    this.events = options.events;
 
     logger.info(`Initial status: ${statusLabel(this.status)}`);
-  }
-
-  /**
-   * Set the handler used to shut down the whole application (tray Quit, idle shutdown)
-   */
-  setQuitHandler(handler: () => void): void {
-    this.onQuit = handler;
   }
 
   getState(): ControllerState {
     return { status: this.status, enabled: this.enabled, connectToMuc: this.connectToMuc };
   }
 
-  /**
-   * Called whenever the status, enabled flag or lobby chat setting changes
-   */
-  onStateChange(listener: (state: ControllerState) => void): void {
-    this.stateListeners.push(listener);
-  }
-
-  onChatServerUnreachable(handler: () => void): void {
-    this.chatUnreachableHandler = handler;
-  }
-
   private notifyStateChange(): void {
-    const state = this.getState();
-    for (const listener of this.stateListeners) {
-      listener(state);
-    }
+    this.events.onStateChange(this.getState());
   }
 
   /**
@@ -85,27 +88,33 @@ export class MainController {
    * Returns the port number.
    */
   startChatListener(): number {
-    const cert = getCertificate();
-
     this.chatServer = Bun.listen<SocketData>({
       hostname: '127.0.0.1',
       port: 0,
       tls: {
-        key: cert.privateKey,
-        cert: cert.certificate,
+        key: this.certificate.privateKey,
+        cert: this.certificate.certificate,
       },
       socket: {
         open: (socket) => this.handleNewConnection(socket),
         data: (socket, data) => this.handleIncomingSocketData(socket, data),
-        close: (socket) => socket.data?.proxiedConnection?.handleClose(),
+        drain: (socket) => socket.data?.proxiedConnection?.flushToClient(),
+        close: (socket) => this.handleIncomingClosed(socket),
         error: (socket, error) => {
           logger.debug(`Incoming socket error: ${error.message}`);
-          socket.data?.proxiedConnection?.handleClose();
+          this.handleIncomingClosed(socket);
         },
       },
     });
 
     return this.chatServer.port;
+  }
+
+  private handleIncomingClosed(socket: Socket<SocketData>): void {
+    socket.data ??= {};
+    socket.data.closed = true;
+    socket.data.pendingData = undefined;
+    socket.data.proxiedConnection?.handleClose();
   }
 
   /**
@@ -139,6 +148,11 @@ export class MainController {
    * Handle a new incoming TLS connection from the Riot Client.
    */
   private handleNewConnection(incomingSocket: Socket<SocketData>): void {
+    if (this.stopped) {
+      incomingSocket.end();
+      return;
+    }
+
     // Cancel shutdown timer if we get a new connection
     if (this.shutdownTimer) {
       clearTimeout(this.shutdownTimer);
@@ -150,12 +164,17 @@ export class MainController {
     // Wait for chat server config before connecting
     if (!this.chatHost || !this.chatPort) {
       logger.debug('Chat server not configured yet, waiting...');
-      const checkConfig = setInterval(() => {
-        if (this.chatHost && this.chatPort) {
-          clearInterval(checkConfig);
+      const waiter = setInterval(() => {
+        if (incomingSocket.data?.closed) {
+          clearInterval(waiter);
+          this.configWaiters.delete(waiter);
+        } else if (this.chatHost && this.chatPort) {
+          clearInterval(waiter);
+          this.configWaiters.delete(waiter);
           this.connectToRealServer(incomingSocket);
         }
       }, 100);
+      this.configWaiters.add(waiter);
       return;
     }
 
@@ -166,33 +185,52 @@ export class MainController {
    * Connect to the real chat server and establish the proxy.
    */
   private connectToRealServer(incomingSocket: Socket<SocketData>): void {
+    const host = this.chatHost;
+    const port = this.chatPort;
+
     Bun.connect<SocketData>({
-      hostname: this.chatHost,
-      port: this.chatPort,
-      tls: { serverName: this.chatHost },
+      hostname: host,
+      port,
+      tls: { serverName: host },
       socket: {
         open: (outgoingSocket) => {
+          this.pendingOutgoing.delete(outgoingSocket);
+          if (this.stopped || incomingSocket.data?.closed) {
+            logger.debug('Riot Client disconnected before the chat server connection was ready');
+            outgoingSocket.end();
+            return;
+          }
           logger.debug('Connected to real chat server');
           this.establishProxiedConnection(incomingSocket, outgoingSocket);
         },
         data: (socket, data) => {
           socket.data?.proxiedConnection?.handleOutgoingData(data);
         },
+        drain: (socket) => socket.data?.proxiedConnection?.flushToServer(),
         close: (socket) => {
+          this.pendingOutgoing.delete(socket);
           socket.data?.proxiedConnection?.handleClose();
         },
         error: (socket, error) => {
           logger.error(`Outgoing socket error: ${error.message}`);
+          this.pendingOutgoing.delete(socket);
           socket.data?.proxiedConnection?.handleClose();
         },
       },
-    }).catch((err: unknown) => {
-      logger.error(
-        `Failed to connect to chat server ${this.chatHost}:${this.chatPort}: ${err instanceof Error ? err.message : String(err)}`
-      );
-      incomingSocket.end();
-      this.chatUnreachableHandler?.();
-    });
+    })
+      .then((socket) => {
+        // open() may already have run; only track sockets that are still being set up
+        if (!socket.data?.proxiedConnection && !this.stopped && !incomingSocket.data?.closed) {
+          this.pendingOutgoing.add(socket);
+        }
+      })
+      .catch((err: unknown) => {
+        logger.error(
+          `Failed to connect to chat server ${host}:${port}: ${err instanceof Error ? err.message : String(err)}`
+        );
+        incomingSocket.end();
+        if (!this.stopped) this.events.onChatServerUnreachable();
+      });
   }
 
   /**
@@ -222,11 +260,11 @@ export class MainController {
 
     this.connections.push(proxiedConnection);
     logger.info('Chat connection established, presence is being masked');
+    this.events.onChatConnected();
 
     // Send introduction messages once, on the very first run (10s delay)
-    if (!this.sentIntroductionText && !config.get('introductionShown')) {
-      this.sentIntroductionText = true;
-      setTimeout(() => void this.sendIntroductionMessages(), 10000);
+    if (!this.introductionShown && !this.introductionTimer) {
+      this.introductionTimer = setTimeout(() => void this.sendIntroductionMessages(), 10000);
     }
   }
 
@@ -241,9 +279,11 @@ export class MainController {
   private scheduleShutdown(): void {
     if (this.shutdownTimer) clearTimeout(this.shutdownTimer);
     this.shutdownTimer = setTimeout(() => {
+      this.shutdownTimer = null;
+      if (this.connections.length > 0 || this.stopped) return;
       logger.info('No chat connections for 60s, shutting down');
-      this.quit();
-    }, 60000);
+      this.events.onIdle();
+    }, IDLE_SHUTDOWN_MS);
   }
 
   getStatus(): PresenceStatus {
@@ -261,7 +301,6 @@ export class MainController {
   setStatus(newStatus: PresenceStatus): void {
     this.status = newStatus;
     this.enabled = true;
-    saveLastStatus(newStatus);
     logger.info(`Status changed to: ${statusLabel(newStatus)}`);
 
     this.notifyStateChange();
@@ -300,7 +339,6 @@ export class MainController {
 
   toggleConnectToMuc(): void {
     this.connectToMuc = !this.connectToMuc;
-    config.set('connectToMuc', this.connectToMuc);
     logger.info(`Lobby chat ${this.connectToMuc ? 'enabled' : 'disabled'}`);
     this.notifyStateChange();
   }
@@ -321,7 +359,9 @@ export class MainController {
    * Send introduction messages to the user explaining how Deceive works.
    */
   private async sendIntroductionMessages(): Promise<void> {
-    config.set('introductionShown', true);
+    if (this.stopped) return;
+    this.introductionShown = true;
+    this.events.onIntroductionShown();
 
     this.sendMessageFromFakePlayer(
       `Welcome! Deceive is running and you are currently appearing ${statusLabel(this.status)}. ` +
@@ -348,22 +388,22 @@ export class MainController {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
-  handleChatMessage(content: string): void {
-    const lowerContent = content.toLowerCase();
+  handleChatMessage(text: string): void {
+    const command = text.trim().toLowerCase();
 
-    if (lowerContent.includes('offline')) {
+    if (command.includes('offline')) {
       this.setStatus(PresenceStatus.Offline);
-    } else if (lowerContent.includes('mobile')) {
+    } else if (command.includes('mobile')) {
       this.setStatus(PresenceStatus.Mobile);
-    } else if (lowerContent.includes('online')) {
+    } else if (command.includes('online')) {
       this.setStatus(PresenceStatus.Online);
-    } else if (lowerContent.includes('enable')) {
-      this.setEnabled(true);
-    } else if (lowerContent.includes('disable')) {
+    } else if (command.includes('disable')) {
       this.setEnabled(false);
-    } else if (lowerContent.includes('status')) {
+    } else if (command.includes('enable')) {
+      this.setEnabled(true);
+    } else if (command.includes('status')) {
       this.sendMessageFromFakePlayer(this.describeStatus());
-    } else if (lowerContent.includes('help')) {
+    } else if (command.includes('help')) {
       this.sendMessageFromFakePlayer(
         'Commands: online, offline, mobile, enable, disable, status, help'
       );
@@ -378,6 +418,18 @@ export class MainController {
       clearTimeout(this.shutdownTimer);
       this.shutdownTimer = null;
     }
+    if (this.introductionTimer) {
+      clearTimeout(this.introductionTimer);
+      this.introductionTimer = null;
+    }
+    for (const waiter of this.configWaiters) {
+      clearInterval(waiter);
+    }
+    this.configWaiters.clear();
+    for (const socket of this.pendingOutgoing) {
+      socket.end();
+    }
+    this.pendingOutgoing.clear();
 
     for (const connection of [...this.connections]) {
       connection.close();
@@ -388,9 +440,5 @@ export class MainController {
       this.chatServer.stop(true);
       this.chatServer = null;
     }
-  }
-
-  quit(): void {
-    this.onQuit();
   }
 }

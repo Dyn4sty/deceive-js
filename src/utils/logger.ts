@@ -23,13 +23,13 @@ class Logger {
   }
 
   /**
-   * Also write log lines to a file. The previous log is kept as `<name>.old.log`.
+   * Also write log lines to a file. With `rotate`, the previous log is kept as `<name>.old.log`.
    * The file always receives debug lines, regardless of the console level.
    */
-  setLogFile(path: string): void {
+  setLogFile(path: string, { rotate = true }: { rotate?: boolean } = {}): void {
     try {
       mkdirSync(dirname(path), { recursive: true });
-      if (existsSync(path)) {
+      if (rotate && existsSync(path)) {
         renameSync(path, path.replace(/\.log$/, '.old.log'));
       }
       this.filePath = path;

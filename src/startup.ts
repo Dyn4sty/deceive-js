@@ -2,23 +2,26 @@
  * Startup handler - orchestrates the application startup sequence
  */
 
-import { LaunchGame, PRODUCT_NAMES, ChatServerConfig, statusLabel } from './types.js';
-import { ConfigProxy } from './proxy/config-proxy.js';
-import { MainController } from './controller.js';
+import { LaunchGame, PRODUCT_NAMES, statusLabel } from './types.js';
 import {
   getRiotClientPath,
   isClientRunning,
   killProcesses,
+  waitForClientExit,
   watchRiotClientExit,
 } from './launcher/process-manager.js';
 import { launchRiotClient } from './launcher/game-launcher.js';
-import { config, resolveStartupStatus } from './config/config.js';
+import { config, resolveStartupStatus, saveLastStatus } from './config/config.js';
 import { loadCertificate, localhostDomainResolves, LOCALHOST_DOMAIN } from './proxy/certificate.js';
+import { ProxyClient } from './proxy/proxy-client.js';
 import { logger } from './utils/logger.js';
 import packageJson from '../package.json' with { type: 'json' };
 
 export const FAQ_URL = 'https://github.com/molenzwiebel/Deceive#faq';
 const ISSUES_URL = 'https://github.com/Dyn4sty/deceive-node/issues';
+
+// After the client received the patched chat config, it should connect to the proxy quickly
+const CHAT_CONNECT_TIMEOUT_MS = 45_000;
 
 /**
  * User interface used during startup, implemented with native dialogs by the app
@@ -35,13 +38,15 @@ export interface StartupUI {
 }
 
 export interface DeceiveSession {
-  controller: MainController;
+  proxy: ProxyClient;
   /** Stop the proxies and watchers. Does not stop the Riot Client. */
-  stop(): void;
+  stop(): Promise<void>;
 }
 
 export interface StartOptions {
-  /** Called when the session ends on its own (Riot Client exited, idle timeout) */
+  /** Path of the bundled proxy worker script */
+  workerPath: string;
+  /** Called when the session ends on its own (Riot Client exited, idle timeout, crash) */
   onExit: (reason: string) => void;
   /** Called when the real chat server cannot be reached */
   onChatServerUnreachable?: () => void;
@@ -68,7 +73,7 @@ export async function startDeceive(
     );
   }
 
-  if (isClientRunning()) {
+  if (await isClientRunning()) {
     logger.info('Riot Client is already running');
     const stop = await ui.confirm(
       'The Riot Client is currently running.',
@@ -77,8 +82,9 @@ export async function startDeceive(
     );
     if (!stop) return null;
     killProcesses();
-    // Riot Client takes a while to die
-    await new Promise((resolve) => setTimeout(resolve, 2000));
+    if (!(await waitForClientExit())) {
+      logger.warn('Riot processes are still running after being stopped');
+    }
   }
 
   const riotClientPath = getRiotClientPath();
@@ -105,6 +111,7 @@ export async function startDeceive(
 
   const status = resolveStartupStatus();
   logger.info(`Status: ${statusLabel(status)}`);
+  saveLastStatus(status);
 
   const certificate = await loadCertificate();
   if (!certificate.trusted) {
@@ -115,56 +122,116 @@ export async function startDeceive(
     );
   }
 
-  const controller = new MainController(status);
-  controller.setQuitHandler(() => options.onExit('quit'));
-  if (options.onChatServerUnreachable) {
-    controller.onChatServerUnreachable(options.onChatServerUnreachable);
-  }
-  const chatPort = controller.startChatListener();
-  logger.info(`Chat proxy listening on port ${chatPort}`);
-
-  const configProxy = new ConfigProxy(chatPort, certificate.trusted);
-  configProxy.start();
-  logger.info(`Config proxy listening on port ${configProxy.port}`);
-
-  let servingClients = false;
-  configProxy.on('patchedChatServer', (serverConfig: ChatServerConfig) => {
-    logger.debug(`Original chat server: ${serverConfig.chatHost}:${serverConfig.chatPort}`);
-    if (!servingClients) {
-      servingClients = true;
-      logger.info(`Original chat server: ${serverConfig.chatHost}:${serverConfig.chatPort}`);
-      controller.setChatServerConfig(serverConfig.chatHost, serverConfig.chatPort);
-    }
+  const proxy = await ProxyClient.start(options.workerPath, {
+    status,
+    connectToMuc: config.get('connectToMuc'),
+    introductionShown: config.get('introductionShown'),
+    certificate: { certificate: certificate.certificate, privateKey: certificate.privateKey },
+    trustedCertificate: certificate.trusted,
+    logFile: logger.getLogFile(),
+    debug: Boolean(process.env.DEBUG),
   });
 
-  launchRiotClient(
+  let stopped = false;
+  let stopWatching: () => void = () => {};
+  let connectTimer: ReturnType<typeof setTimeout> | null = null;
+  let chatConnected = false;
+  let warnedNotMasked = false;
+
+  const stop = async () => {
+    if (stopped) return;
+    stopped = true;
+    stopWatching();
+    if (connectTimer) clearTimeout(connectTimer);
+    await proxy.stop();
+  };
+
+  const exit = (reason: string) => {
+    if (stopped) return;
+    void stop().then(() => options.onExit(reason));
+  };
+
+  const warnNotMasked = (detail: string) => {
+    if (warnedNotMasked || stopped) return;
+    warnedNotMasked = true;
+    void ui.warn('Deceive may not be hiding your status.', detail, {
+      label: 'Open FAQ',
+      url: FAQ_URL,
+    });
+  };
+
+  // Settings live on the main thread; the worker only reports changes
+  proxy.on('state', (state) => {
+    saveLastStatus(state.status);
+    config.set('connectToMuc', state.connectToMuc);
+  });
+  proxy.on('introductionShown', () => config.set('introductionShown', true));
+  proxy.on('idle', () => exit('no chat connections'));
+  proxy.on('chatUnreachable', () => options.onChatServerUnreachable?.());
+  proxy.on('crashed', (message) => {
+    if (stopped) return;
+    logger.error(`Proxy stopped unexpectedly: ${message}`);
+    void ui
+      .error(
+        'Deceive stopped unexpectedly.',
+        `${message}\n\nYour status is no longer being hidden.`
+      )
+      .then(() => exit('proxy crashed'));
+  });
+  proxy.on('configRewriteFailed', (message) =>
+    warnNotMasked(
+      'Deceive was unable to rewrite the Riot Client configuration, so chat may connect directly to Riot. ' +
+        `This normally happens because Riot changed something on their end. Check for a new version of Deceive.\n\n${message}`
+    )
+  );
+  proxy.on('chatConfigured', () => {
+    if (chatConnected || connectTimer) return;
+    connectTimer = setTimeout(() => {
+      if (!chatConnected) {
+        warnNotMasked(
+          'The Riot Client received the chat configuration but has not connected to chat through Deceive. ' +
+            'Check deceive.log (tray menu > Open Logs Folder) for errors.'
+        );
+      }
+    }, CHAT_CONNECT_TIMEOUT_MS);
+  });
+  proxy.on('chatConnected', () => {
+    if (chatConnected) return;
+    chatConnected = true;
+    if (connectTimer) clearTimeout(connectTimer);
+    ui.notify(
+      'Deceive is active',
+      `You are appearing ${statusLabel(proxy.getState().status)}. Use the Deceive menu bar/tray icon for more options.`
+    );
+  });
+
+  const launchError = await launchRiotClient(
     riotClientPath,
-    configProxy.port,
+    proxy.configPort,
     PRODUCT_NAMES[game],
     options.patchline ?? 'live'
   );
+  if (launchError) {
+    await stop();
+    await ui.error('Deceive was unable to start the Riot Client.', launchError);
+    return null;
+  }
 
-  let stopped = false;
-  const stopWatching = watchRiotClientExit(() => options.onExit('Riot Client exited'));
+  stopWatching = watchRiotClientExit({
+    onExit: () => exit('Riot Client exited'),
+    onNeverStarted: () => {
+      if (stopped) return;
+      logger.error('Riot Client was not seen running after launch');
+      void ui
+        .error(
+          'The Riot Client did not start.',
+          'Deceive launched the Riot Client, but it is not running. Try starting Deceive again.'
+        )
+        .then(() => exit('Riot Client did not start'));
+    },
+  });
 
-  ui.notify(
-    'Deceive is running',
-    'Deceive is currently masking your status. Use the Deceive menu bar/tray icon for more options.'
-  );
   logger.info('Deceive is running');
 
-  return {
-    controller,
-    stop: () => {
-      if (stopped) return;
-      stopped = true;
-      stopWatching();
-      try {
-        controller.stop();
-        configProxy.stop();
-      } catch (err) {
-        logger.debug(`Error during shutdown: ${err instanceof Error ? err.message : String(err)}`);
-      }
-    },
-  };
+  return { proxy, stop };
 }

@@ -2,28 +2,42 @@
  * Proxied Connection - Handles bidirectional TLS proxy between
  * Riot Client and chat server, rewriting presence stanzas.
  *
- * Uses Bun's native socket types for better performance.
+ * Both directions are split into complete stanzas before they are inspected, so a stanza
+ * that arrives across several reads is never forwarded half-rewritten.
  */
 
-import type { Socket } from 'bun';
 import { EventEmitter } from 'events';
 import { PresenceStatus } from '../types.js';
 import { logger } from '../utils/logger.js';
-import type { MainController } from '../controller.js';
+import { StanzaSplitter, type StanzaUnit } from './stanza-splitter.js';
+import { SocketWriter, type WritableSocket } from './socket-writer.js';
 
 // Fake player JID for in-app messaging
-const FAKE_PLAYER_JID = '41c322a1-b328-495b-a004-5ccd3e45eae8@eu1.pvp.net';
+export const FAKE_PLAYER_JID = '41c322a1-b328-495b-a004-5ccd3e45eae8@eu1.pvp.net';
 
 // Game presences that are stripped entirely when not appearing online
 const STRIPPED_GAMES = ['bacon', 'lion', 'keystone', 'riot_client', 'teamfighttactics'];
 
-const PRESENCE_STANZA = /<presence\b[^>]*?(?:\/>|>[\s\S]*?<\/presence>)/g;
+const ROSTER_QUERY = "<query xmlns='jabber:iq:riotgames:roster'>";
+
+/**
+ * What a connection needs from its owner
+ */
+export interface PresenceHost {
+  isEnabled(): boolean;
+  getStatus(): PresenceStatus;
+  shouldConnectToMuc(): boolean;
+  /** Text of a chat message sent to the fake player */
+  handleChatMessage(text: string): void;
+}
 
 interface ProxiedConnectionEvents {
   close: () => void;
 }
 
-type SocketData = { proxiedConnection?: ProxiedConnection };
+export interface ProxySocket extends WritableSocket {
+  end(): void;
+}
 
 function elementPattern(name: string): RegExp {
   return new RegExp(`<${name}\\b[^>]*?(?:\\/>|>[\\s\\S]*?<\\/${name}>)`, 'g');
@@ -57,70 +71,126 @@ function getElementContent(xml: string, name: string): string | null {
   return match?.[1] ?? null;
 }
 
+function decodeEntities(text: string): string {
+  return text
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, '&');
+}
+
+function escapeXml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/'/g, '&apos;')
+    .replace(/"/g, '&quot;');
+}
+
+/**
+ * Whether a presence is directed at a chat room (lobby/champ select), i.e. has a `to` attribute
+ */
+function isRoomPresence(presence: string): boolean {
+  const openingTag = /^<presence\b[^>]*>/.exec(presence)?.[0] ?? '';
+  return /\sto=/.test(openingTag);
+}
+
 export class ProxiedConnection extends EventEmitter {
-  private controller: MainController;
-  private incoming: Socket<SocketData>;
-  private outgoing: Socket<SocketData>;
+  private host: PresenceHost;
+  private incoming: ProxySocket;
+  private outgoing: ProxySocket;
+  private toClient: SocketWriter;
+  private toServer: SocketWriter;
+  private fromClient = new StanzaSplitter();
+  private fromServer = new StanzaSplitter();
   private connected = true;
+  /** Most recent presence (not directed at a room) sent by the client, unmodified */
   private lastPresence: string | null = null;
   private insertedFakePlayer = false;
   private sentFakePlayerPresence = false;
   private valorantVersion: string | null = null;
 
-  constructor(
-    controller: MainController,
-    incoming: Socket<SocketData>,
-    outgoing: Socket<SocketData>
-  ) {
+  constructor(host: PresenceHost, incoming: ProxySocket, outgoing: ProxySocket) {
     super();
-    this.controller = controller;
+    this.host = host;
     this.incoming = incoming;
     this.outgoing = outgoing;
+    const overflow = (direction: string) => () => {
+      logger.warn(`Closing chat connection: ${direction} stopped reading`);
+      this.close();
+    };
+    this.toClient = new SocketWriter(incoming, overflow('Riot Client'));
+    this.toServer = new SocketWriter(outgoing, overflow('chat server'));
   }
 
   /**
    * Handle data from the Riot Client (incoming socket).
-   * Called by the controller when data is received.
    */
   handleIncomingData(data: Buffer | Uint8Array): void {
     if (!this.connected) return;
 
-    try {
-      const content = Buffer.from(data).toString('utf-8');
-
-      if (content.includes('<presence') && this.controller.isEnabled()) {
-        logger.debug('Intercepting presence stanza');
-        this.rewriteAndSendPresence(content, this.controller.getStatus());
-      } else if (content.includes(FAKE_PLAYER_JID)) {
-        // Don't send anything involving our fake player to the chat server
-        this.controller.handleChatMessage(content);
-        logger.debug('Intercepted message to fake player');
-      } else {
-        this.outgoing.write(data);
+    let out = '';
+    let foundValorantVersion = false;
+    for (const unit of this.fromClient.push(data)) {
+      try {
+        const result = this.processClientUnit(unit);
+        out += result.xml;
+        if (result.foundValorantVersion) foundValorantVersion = true;
+      } catch (err) {
+        // Fail closed: never forward a presence we failed to rewrite
+        logger.error('Error handling stanza from Riot Client:', err);
+        if (unit.name !== 'presence') out += unit.xml;
       }
-
-      // Send fake player presence after roster is received
-      if (this.insertedFakePlayer && !this.sentFakePlayerPresence) {
-        this.sendFakePlayerPresence();
-      }
-    } catch (err) {
-      logger.error('Error handling incoming data:', err);
     }
+    if (out) this.toServer.write(out);
+
+    // Send fake player presence after the roster is received, and again once the
+    // VALORANT version is known
+    if (this.insertedFakePlayer && (!this.sentFakePlayerPresence || foundValorantVersion)) {
+      this.sendFakePlayerPresence();
+    }
+  }
+
+  private processClientUnit(unit: StanzaUnit): { xml: string; foundValorantVersion?: boolean } {
+    if (unit.name === 'presence') {
+      if (isRoomPresence(unit.xml)) {
+        // Lobby chat presence: pass through, or drop if lobby chat is disabled
+        const keep = !this.host.isEnabled() || this.host.shouldConnectToMuc();
+        return { xml: keep ? unit.xml : '' };
+      }
+
+      this.lastPresence = unit.xml;
+      if (!this.host.isEnabled()) return { xml: unit.xml };
+      logger.debug('Rewriting presence stanza');
+      return this.rewritePresence(unit.xml, this.host.getStatus());
+    }
+
+    if (unit.name !== null && unit.xml.includes(FAKE_PLAYER_JID)) {
+      // Don't send anything involving our fake player to the chat server
+      if (unit.name === 'message') {
+        const body = getElementContent(unit.xml, 'body');
+        if (body !== null) {
+          logger.debug('Intercepted message to fake player');
+          this.host.handleChatMessage(decodeEntities(body));
+        }
+      }
+      return { xml: '' };
+    }
+
+    return { xml: unit.xml };
   }
 
   /**
    * Handle data from the real chat server (outgoing socket).
-   * Called by the controller when data is received.
    */
   handleOutgoingData(data: Buffer | Uint8Array): void {
     if (!this.connected) return;
 
-    try {
-      let content = Buffer.from(data).toString('utf-8');
-
-      // Inject fake player into roster
-      const roster = "<query xmlns='jabber:iq:riotgames:roster'>";
-      if (!this.insertedFakePlayer && content.includes(roster)) {
+    let out = '';
+    for (const unit of this.fromServer.push(data)) {
+      if (!this.insertedFakePlayer && unit.name === 'iq' && unit.xml.includes(ROSTER_QUERY)) {
         this.insertedFakePlayer = true;
         logger.debug('Injecting fake player into roster');
 
@@ -132,16 +202,22 @@ export class ProxiedConnection extends EventEmitter {
           "<lol name='&#9;Deceive Active!'/>" +
           "<platforms><riot name='&#9;Deceive Active' tagline='...'/></platforms>" +
           '</item>';
-
-        content = content.replace(roster, roster + fakePlayer);
-        this.incoming.write(Buffer.from(content, 'utf-8'));
-        return;
+        out += unit.xml.replace(ROSTER_QUERY, ROSTER_QUERY + fakePlayer);
+      } else {
+        out += unit.xml;
       }
-
-      this.incoming.write(data);
-    } catch (err) {
-      logger.error('Error handling outgoing data:', err);
     }
+    if (out) this.toClient.write(out);
+  }
+
+  /** Call when the socket to the Riot Client drains */
+  flushToClient(): void {
+    this.toClient.flush();
+  }
+
+  /** Call when the socket to the chat server drains */
+  flushToServer(): void {
+    this.toServer.flush();
   }
 
   /**
@@ -151,37 +227,6 @@ export class ProxiedConnection extends EventEmitter {
   handleClose(): void {
     if (!this.connected) return;
     this.close();
-  }
-
-  private rewriteAndSendPresence(content: string, targetStatus: PresenceStatus): void {
-    this.lastPresence = content;
-    let foundValorantVersion = false;
-
-    try {
-      const modified = content.replace(PRESENCE_STANZA, (presence) => {
-        const openingTag = /^<presence\b[^>]*>/.exec(presence)?.[0] ?? '';
-
-        // Presence with 'to' is for MUC (lobby chat): pass through, or drop if lobby chat is disabled
-        if (/\sto=/.test(openingTag)) {
-          return this.controller.shouldConnectToMuc() ? presence : '';
-        }
-
-        const rewritten = this.rewritePresence(presence, targetStatus);
-        if (rewritten.foundValorantVersion) foundValorantVersion = true;
-        return rewritten.xml;
-      });
-
-      this.outgoing.write(Buffer.from(modified, 'utf-8'));
-      logger.debug('Sent modified presence');
-    } catch (err) {
-      logger.error('Error rewriting presence:', err);
-      this.outgoing.write(Buffer.from(content, 'utf-8'));
-    }
-
-    // Resend the fake player presence with the detected VALORANT version
-    if (foundValorantVersion && this.insertedFakePlayer) {
-      this.sendFakePlayerPresence();
-    }
   }
 
   private rewritePresence(
@@ -332,7 +377,7 @@ export class ProxiedConnection extends EventEmitter {
       '<status/>' +
       '</presence>';
 
-    this.incoming.write(Buffer.from(presenceMessage, 'utf-8'));
+    this.toClient.write(presenceMessage);
     logger.debug('Sent fake player presence');
   }
 
@@ -343,19 +388,26 @@ export class ProxiedConnection extends EventEmitter {
 
     const stamp = new Date().toISOString().replace('T', ' ').replace('Z', '');
     const chatMessage =
-      `<message from='${FAKE_PLAYER_JID}/RC-Deceive' stamp='${stamp}' id='fake-${stamp}' type='chat'>` +
-      `<body>${message}</body>` +
+      `<message from='${FAKE_PLAYER_JID}/RC-Deceive' stamp='${stamp}' id='fake-${crypto.randomUUID()}' type='chat'>` +
+      `<body>${escapeXml(message)}</body>` +
       '</message>';
 
-    this.incoming.write(Buffer.from(chatMessage, 'utf-8'));
+    this.toClient.write(chatMessage);
     logger.debug(`Sent message from fake player: ${message}`);
   }
 
+  /**
+   * Resend the last presence with a new status (or unmodified-but-online when Deceive is disabled)
+   */
   updateStatus(newStatus: PresenceStatus): void {
     if (!this.lastPresence || !this.connected) {
       return;
     }
-    this.rewriteAndSendPresence(this.lastPresence, newStatus);
+    try {
+      this.toServer.write(this.rewritePresence(this.lastPresence, newStatus).xml);
+    } catch (err) {
+      logger.error('Error resending presence:', err);
+    }
   }
 
   close(): void {
