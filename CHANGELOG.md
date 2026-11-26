@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0](https://github.com/Dyn4sty/deceive-js/compare/v1.1.0...v2.0.0) (2026-11-26)
+
+
+### ⚠ BREAKING CHANGES
+
+* rewrite as Electrobun desktop app
+
+### Features
+
+* rewrite as Electrobun desktop app ([609c8ef](https://github.com/Dyn4sty/deceive-js/commit/609c8efcc440a43cca80c456a9bf6a57b47d7535))
+
+
+### Bug Fixes
+
+* harden the chat proxy against split stanzas, dropped writes and blocking dialogs ([0e459a8](https://github.com/Dyn4sty/deceive-js/commit/0e459a8586c5009671a2ef6d49a1bfff3edd82fd))
+
 ## [2.0.0](https://github.com/Dyn4sty/deceive-node/compare/v1.2.0...v2.0.0) (2026-11-26)
 
 ### ⚠ BREAKING CHANGES
