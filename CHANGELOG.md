@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.1](https://github.com/Dyn4sty/deceive-js/compare/v2.1.0...v2.1.1) (2026-11-26)
+
+
+### Bug Fixes
+
+* Windows build icon and "damaged" macOS app ([4a4fdfe](https://github.com/Dyn4sty/deceive-js/commit/4a4fdfe5f10c0dc6a56d945b678db177b385247e))
+
 ## [2.1.0](https://github.com/Dyn4sty/deceive-js/compare/v2.0.0...v2.1.0) (2026-11-26)
 
 
