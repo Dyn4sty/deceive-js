@@ -1,0 +1,52 @@
+import type { ElectrobunConfig } from 'electrobun';
+import packageJson from './package.json' with { type: 'json' };
+
+export default {
+  app: {
+    name: 'Deceive',
+    identifier: 'dev.dyn4sty.deceive',
+    version: packageJson.version,
+    description: packageJson.description,
+  },
+  build: {
+    mainProcess: 'bun',
+    bun: {
+      entrypoint: 'src/bun/index.ts',
+    },
+    views: {
+      picker: {
+        entrypoint: 'src/views/picker/index.ts',
+      },
+    },
+    copy: {
+      'src/views/picker/index.html': 'views/picker/index.html',
+      'src/views/picker/index.css': 'views/picker/index.css',
+      'assets/games/lol.png': 'views/games/lol.png',
+      'assets/games/tft.png': 'views/games/tft.png',
+      'assets/games/valorant.png': 'views/games/valorant.png',
+      'assets/games/lor.png': 'views/games/lor.png',
+      'assets/games/lion.png': 'views/games/lion.png',
+      'assets/games/riot_client.png': 'views/games/riot_client.png',
+      'assets/icons/tray-template.png': 'views/icons/tray-template.png',
+      'assets/icons/tray-offline.png': 'views/icons/tray-offline.png',
+      'assets/icons/tray-online.png': 'views/icons/tray-online.png',
+      'assets/icons/tray-mobile.png': 'views/icons/tray-mobile.png',
+    },
+    mac: {
+      bundleCEF: false,
+      icons: 'assets/app.iconset',
+    },
+    win: {
+      bundleCEF: false,
+      icon: 'assets/icons/app.png',
+    },
+    linux: {
+      bundleCEF: false,
+      icon: 'assets/icons/app.png',
+    },
+  },
+  runtime: {
+    // Deceive lives in the tray; closing the game picker must not quit the app
+    exitOnLastWindowClosed: false,
+  },
+} satisfies ElectrobunConfig;

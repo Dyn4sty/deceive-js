@@ -2,13 +2,7 @@
  * Startup handler - orchestrates the application startup sequence
  */
 
-import {
-  LaunchGame,
-  PresenceStatus,
-  PRODUCT_NAMES,
-  ChatServerConfig,
-  statusLabel,
-} from './types.js';
+import { LaunchGame, PRODUCT_NAMES, ChatServerConfig, statusLabel } from './types.js';
 import { ConfigProxy } from './proxy/config-proxy.js';
 import { MainController } from './controller.js';
 import {
@@ -21,149 +15,156 @@ import { launchRiotClient } from './launcher/game-launcher.js';
 import { config, resolveStartupStatus } from './config/config.js';
 import { loadCertificate, localhostDomainResolves, LOCALHOST_DOMAIN } from './proxy/certificate.js';
 import { logger } from './utils/logger.js';
-import { promptForGame, promptForStatus, confirm, startCommandLoop } from './ui/cli.js';
 import packageJson from '../package.json' with { type: 'json' };
 
-const STATUS_MAP: Record<string, PresenceStatus> = {
-  offline: PresenceStatus.Offline,
-  online: PresenceStatus.Online,
-  mobile: PresenceStatus.Mobile,
-  chat: PresenceStatus.Online,
-};
+export const FAQ_URL = 'https://github.com/molenzwiebel/Deceive#faq';
+const ISSUES_URL = 'https://github.com/Dyn4sty/deceive-node/issues';
 
 /**
- * Main entry point for starting Deceive
- *
- * @param statusStr Initial status (offline/online/mobile), 'prompt' to ask interactively,
- *   or null to use the configured startup status
+ * User interface used during startup, implemented with native dialogs by the app
+ */
+export interface StartupUI {
+  /** OK/Cancel question. Resolves true for OK. */
+  confirm(message: string, detail?: string): Promise<boolean>;
+  /** Warning with an optional link button. */
+  warn(message: string, detail?: string, link?: { label: string; url: string }): Promise<void>;
+  error(message: string, detail?: string): Promise<void>;
+  notify(title: string, body: string): void;
+  /** Ask which game to launch. Resolves null if cancelled. */
+  pickGame(): Promise<LaunchGame | null>;
+}
+
+export interface DeceiveSession {
+  controller: MainController;
+  /** Stop the proxies and watchers. Does not stop the Riot Client. */
+  stop(): void;
+}
+
+export interface StartOptions {
+  /** Called when the session ends on its own (Riot Client exited, idle timeout) */
+  onExit: (reason: string) => void;
+  /** Called when the real chat server cannot be reached */
+  onChatServerUnreachable?: () => void;
+  patchline?: string;
+}
+
+/**
+ * Start Deceive: launch the Riot Client through the proxies.
+ * Resolves null if the user cancelled or Deceive cannot start.
  */
 export async function startDeceive(
-  game: LaunchGame,
-  statusStr: string | null,
-  patchline: string,
-  showTray: boolean
-): Promise<void> {
+  ui: StartupUI,
+  options: StartOptions
+): Promise<DeceiveSession | null> {
   logger.info(`League Deceiver v${packageJson.version}`);
 
   if (!(await localhostDomainResolves())) {
-    logger.warn(
-      `Your machine is failing to resolve ${LOCALHOST_DOMAIN} to 127.0.0.1. ` +
-        'Deceive will not work until this is resolved. Switch to a different DNS server (like 1.1.1.1 or 8.8.8.8), ' +
-        `or add "127.0.0.1 ${LOCALHOST_DOMAIN}" to your hosts file (/etc/hosts on macOS/Linux). ` +
-        'See https://github.com/molenzwiebel/Deceive#faq for details.'
+    logger.warn(`${LOCALHOST_DOMAIN} does not resolve to 127.0.0.1`);
+    await ui.warn(
+      'Your machine is failing to resolve some required domains.',
+      'You will need to switch DNS servers (for example to 1.1.1.1 or 8.8.8.8) or add ' +
+        `"127.0.0.1 ${LOCALHOST_DOMAIN}" to your hosts file. Deceive will not work until this is resolved.`,
+      { label: 'Open FAQ', url: FAQ_URL }
     );
   }
 
-  // Check if Riot Client is already running
   if (isClientRunning()) {
-    logger.warn('The Riot Client is currently running.');
-    const stop = await confirm(
-      'To mask your status, the Riot Client needs to be started by Deceive. Stop the Riot Client and its games now?'
+    logger.info('Riot Client is already running');
+    const stop = await ui.confirm(
+      'The Riot Client is currently running.',
+      'In order to mask your online status, the Riot Client needs to be started by Deceive. ' +
+        'Do you want Deceive to stop the Riot Client and games launched by it, so that it can restart with the proper configuration?'
     );
-    if (!stop) {
-      logger.info('Riot Client left running, exiting.');
-      process.exit(0);
-    }
+    if (!stop) return null;
     killProcesses();
     // Riot Client takes a while to die
     await new Promise((resolve) => setTimeout(resolve, 2000));
   }
 
-  // Find Riot Client path
   const riotClientPath = getRiotClientPath();
   if (!riotClientPath) {
-    logger.error(
-      'Unable to find Riot Client installation. Please launch any Riot game once, then try again.'
+    logger.error('Unable to find the Riot Client installation');
+    await ui.error(
+      'Deceive was unable to find the path to the Riot Client.',
+      'Usually this can be resolved by launching any Riot Games game once, then launching Deceive again. ' +
+        `If this does not resolve the issue, please file a bug report at ${ISSUES_URL}.`
     );
-    process.exit(1);
+    return null;
   }
-
   logger.info(`Found Riot Client at: ${riotClientPath}`);
 
-  // Handle game selection
-  if (game === LaunchGame.Auto) {
-    game = config.get('defaultGame') ?? LaunchGame.Prompt;
-  }
-
-  if (game === LaunchGame.Prompt) {
-    game = await promptForGame();
-    if (game === LaunchGame.Prompt) {
-      logger.info('No game selected, exiting.');
-      process.exit(0);
+  let game = config.get('defaultGame') ?? LaunchGame.Prompt;
+  if (game === LaunchGame.Auto || game === LaunchGame.Prompt) {
+    const picked = await ui.pickGame();
+    if (!picked) {
+      logger.info('No game selected');
+      return null;
     }
+    game = picked;
   }
 
-  let status: PresenceStatus;
-  if (statusStr === null) {
-    status = resolveStartupStatus();
-  } else if (statusStr.toLowerCase() === 'prompt') {
-    status = await promptForStatus();
-  } else {
-    status = STATUS_MAP[statusStr.toLowerCase()] ?? PresenceStatus.Offline;
-  }
-
+  const status = resolveStartupStatus();
   logger.info(`Status: ${statusLabel(status)}`);
 
-  // Step 1: Get the certificate used to intercept the chat connection
   const certificate = await loadCertificate();
+  if (!certificate.trusted) {
+    await ui.error(
+      'Deceive was unable to obtain the security certificate needed to intercept the chat connection.',
+      'This normally happens when the server providing the certificate has a problem, but it can also be caused by ' +
+        'network issues on your end. Deceive will continue with a fallback certificate, but chat may fail to connect.'
+    );
+  }
 
-  // Step 2: Create main controller and start the chat TLS listener
-  const mainController = new MainController(status, showTray);
-  const chatPort = mainController.startChatListener();
+  const controller = new MainController(status);
+  controller.setQuitHandler(() => options.onExit('quit'));
+  if (options.onChatServerUnreachable) {
+    controller.onChatServerUnreachable(options.onChatServerUnreachable);
+  }
+  const chatPort = controller.startChatListener();
   logger.info(`Chat proxy listening on port ${chatPort}`);
 
-  // Step 3: Start config proxy
   const configProxy = new ConfigProxy(chatPort, certificate.trusted);
   configProxy.start();
   logger.info(`Config proxy listening on port ${configProxy.port}`);
 
-  // Step 4: Listen for chat server configuration
   let servingClients = false;
   configProxy.on('patchedChatServer', (serverConfig: ChatServerConfig) => {
     logger.debug(`Original chat server: ${serverConfig.chatHost}:${serverConfig.chatPort}`);
-
     if (!servingClients) {
       servingClients = true;
       logger.info(`Original chat server: ${serverConfig.chatHost}:${serverConfig.chatPort}`);
-      mainController.setChatServerConfig(serverConfig.chatHost, serverConfig.chatPort);
+      controller.setChatServerConfig(serverConfig.chatHost, serverConfig.chatPort);
     }
   });
 
-  let shuttingDown = false;
-  let stopWatchingClient: () => void = () => {};
-  let stopCommandLoop: () => void = () => {};
+  launchRiotClient(
+    riotClientPath,
+    configProxy.port,
+    PRODUCT_NAMES[game],
+    options.patchline ?? 'live'
+  );
 
-  const shutdown = (reason: string): void => {
-    if (shuttingDown) return;
-    shuttingDown = true;
-    logger.info(`Shutting down (${reason})...`);
-    stopWatchingClient();
-    stopCommandLoop();
-    try {
-      mainController.stop();
-      configProxy.stop();
-    } catch (err) {
-      logger.debug(`Error during shutdown: ${err instanceof Error ? err.message : String(err)}`);
-    }
-    process.exit(0);
+  let stopped = false;
+  const stopWatching = watchRiotClientExit(() => options.onExit('Riot Client exited'));
+
+  ui.notify(
+    'Deceive is running',
+    'Deceive is currently masking your status. Use the Deceive menu bar/tray icon for more options.'
+  );
+  logger.info('Deceive is running');
+
+  return {
+    controller,
+    stop: () => {
+      if (stopped) return;
+      stopped = true;
+      stopWatching();
+      try {
+        controller.stop();
+        configProxy.stop();
+      } catch (err) {
+        logger.debug(`Error during shutdown: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
   };
-
-  mainController.setQuitHandler(() => shutdown('quit'));
-  process.on('SIGINT', () => shutdown('interrupted'));
-  process.on('SIGTERM', () => shutdown('terminated'));
-
-  // Step 5: Launch Riot Client with our config proxy
-  const product = PRODUCT_NAMES[game];
-  launchRiotClient(riotClientPath, configProxy.port, product, patchline);
-
-  // Step 6: Exit when the Riot Client exits
-  stopWatchingClient = watchRiotClientExit(() => shutdown('Riot Client exited'));
-
-  logger.info('Deceive is running. Press Ctrl+C to exit.');
-  stopCommandLoop = startCommandLoop({
-    setStatus: (newStatus) => mainController.setStatus(newStatus),
-    setEnabled: (enabled) => mainController.setEnabled(enabled),
-    describeStatus: () => mainController.describeStatus(),
-    quit: () => shutdown('quit'),
-  });
 }

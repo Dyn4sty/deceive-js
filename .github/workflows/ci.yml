@@ -20,8 +20,17 @@ jobs:
         with:
           bun-version: latest
 
+      - name: Install Hutch
+        run: |
+          curl -fsSL https://hutch.blackboard.sh/hutch/install.sh | sh
+          echo "$HOME/.hutch/bin" >> "$GITHUB_PATH"
+
       - name: Install dependencies
         run: bun install --frozen-lockfile
+
+      # Generates .hutch/devkit, which provides the electrobun/* types
+      - name: Prepare Electrobun devkit
+        run: hutch electrobun prepare
 
       - name: Run ESLint
         run: bun run lint
@@ -56,16 +65,9 @@ jobs:
       - name: Run tests
         run: bun run test
 
-      - name: Upload coverage
-        if: matrix.os == 'ubuntu-latest'
-        uses: codecov/codecov-action@v3
-        with:
-          files: ./coverage/lcov.info
-          fail_ci_if_error: false
-
   build:
-    name: Build
-    runs-on: ubuntu-latest
+    name: Build (macOS canary)
+    runs-on: macos-latest
     needs: [lint, test]
     if: ${{ !startsWith(github.head_ref, 'release-please') }}
     steps:
@@ -77,15 +79,20 @@ jobs:
         with:
           bun-version: latest
 
+      - name: Install Hutch
+        run: |
+          curl -fsSL https://hutch.blackboard.sh/hutch/install.sh | sh
+          echo "$HOME/.hutch/bin" >> "$GITHUB_PATH"
+
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Build
-        run: bun run build
+      - name: Build app
+        run: hutch electrobun build --env=canary
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: dist
-          path: dist/
+          name: deceive-canary-macos-arm64
+          path: artifacts/*.dmg
           retention-days: 7

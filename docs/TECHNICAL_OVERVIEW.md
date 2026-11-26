@@ -12,7 +12,7 @@ flowchart TD
         ConfigProxy[Config Proxy - HTTP Server]
         ChatProxy[Chat Proxy - TLS Server]
         PresenceHandler[Presence Handler - XMPP Rewriter]
-        TrayIcon[System Tray and CLI]
+        TrayIcon[System Tray and Dialogs]
     end
 
     RiotClient[Riot Client] -->|1. GET config| ConfigProxy

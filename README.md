@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/logo.ico" alt="League Deceiver Logo" width="200"/>
+  <img src="assets/icons/app.png" alt="League Deceiver Logo" width="200"/>
 </p>
 
 <h1 align="center">League Deceiver</h1>
@@ -48,91 +48,61 @@
 
 ## Installation
 
-### Download Pre-built Binary
+### Download
 
 1. Go to the [Releases](https://github.com/Dyn4sty/deceive-node/releases) page
-2. Download the appropriate version for your operating system:
-   - **Windows**: `deceive-node-win.exe`
-   - **macOS**: `deceive-node-macos`
-   - **Linux**: `deceive-node-linux`
-3. Run the executable
+2. Download the installer for your system:
+   - **macOS (Apple Silicon)**: `macos-arm64-Deceive.dmg`
+   - **macOS (Intel)**: `macos-x64-Deceive.dmg`
+   - **Windows**: `win-x64-Deceive-Setup.zip`
+   - **Linux**: `linux-x64-Deceive-Setup.tar.gz`
+3. Install and open **Deceive**
 
-### Install via npm
-
-```bash
-npm install -g league-deceiver
-```
+macOS 14 or later is required.
 
 ### Build from Source
 
+League Deceiver is an [Electrobun](https://electrobun.dev) app. You need [Bun](https://bun.sh) and [Hutch](https://docs.electrobun.dev/electrobun/guides/hutch/), Electrobun's build tool:
+
 ```bash
-# Clone the repository
+curl -fsSL https://hutch.blackboard.sh/hutch/install.sh | sh
+
 git clone https://github.com/Dyn4sty/deceive-node.git
 cd deceive-node
-
-# Install dependencies
 bun install
 
-# Run in development
+# Run in development (rebuilds on change)
 bun run dev
 
-# Build standalone executable
-bun run package # or package:win / package:mac / package:linux
+# Build a release (app bundle, installer and update archive in artifacts/)
+bun run build
 ```
+
+Hutch builds for the platform it runs on, so each OS has to be built on that OS.
 
 ## Usage
 
-### Basic Usage
+Open Deceive. Like the original Deceive, it has no main window:
 
-Simply run League Deceiver and select your game:
+1. If the Riot Client is already running, Deceive asks to stop it, because it has to start the Riot Client itself to mask your status.
+2. A small window asks which game to launch. Tick **Remember my choice** to skip it next time.
+3. Deceive launches the game and lives in the menu bar (macOS) or system tray (Windows/Linux).
 
-```bash
-league-deceiver launch
-```
-
-### Launch Specific Game
-
-```bash
-# Launch League of Legends
-league-deceiver launch lol
-
-# Launch Teamfight Tactics
-league-deceiver launch tft
-
-# Launch VALORANT
-league-deceiver launch valorant
-
-# Launch Legends of Runeterra
-league-deceiver launch lor
-
-# Launch 2XKO
-league-deceiver launch lion
-```
-
-### Command Options
-
-```bash
-# Launch with specific status (default: the "Default Status on Startup" setting,
-# which remembers your last status unless changed in the tray menu)
-league-deceiver launch lol --status offline   # Appear offline
-league-deceiver launch lol --status mobile    # Appear on mobile
-league-deceiver launch lol --status online    # Appear online
-league-deceiver launch lol --status prompt    # Ask on startup
-
-# Run without the system tray icon
-league-deceiver launch lol --no-tray
-
-# Use different patchline
-league-deceiver launch lol --patchline pbe
-```
+Logs are written to `deceive.log` in the app's log folder. Use **Open Logs Folder** in the menu to find it.
 
 ### Tray Menu
 
-The tray (menu bar on macOS) icon lets you enable or disable Deceive, switch between online, offline and mobile, choose the default status on startup, and toggle lobby chat.
+- **Enabled** - turn masking on or off (off means you appear with your real status)
+- **Online / Offline / Mobile** - the status your friends see
+- **Default Status on Startup** - a fixed status, or **Remember Last**
+- **Enable Lobby Chat** - keep your presence in lobby and champion select chat
+- **Restart and Launch a Different Game**
+- **Open Logs Folder**
+- **Quit** - stops Deceive and the Riot Client
 
-### In-Game and Terminal Commands
+### In-Game Commands
 
-Once running, you can change your status by messaging the "Deceive Active!" friend in your friends list, or by typing the same commands into the terminal where League Deceiver is running (plus `quit`):
+Once running, you can also change your status by messaging the "Deceive Active!" friend in your friends list:
 
 - `offline` - Appear offline
 - `online` - Appear online

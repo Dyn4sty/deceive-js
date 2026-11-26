@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0](https://github.com/Dyn4sty/deceive-node/compare/v1.2.0...v2.0.0) (2026-11-26)
+
+### ⚠ BREAKING CHANGES
+
+- League Deceiver is now a desktop app built with [Electrobun](https://electrobun.dev), like the original Deceive. The command-line interface (`league-deceiver launch ...`, `--status`, `--no-tray`, `--patchline`, terminal commands) has been removed.
+- Releases are now installers per platform (`.dmg` for Apple Silicon and Intel Macs, Windows setup, Linux setup) instead of single executables. macOS 14 or later is required.
+
+### Added
+
+- Game picker window with League of Legends, TFT, VALORANT, Legends of Runeterra, 2XKO and Riot Client buttons, and a "Remember my choice" checkbox
+- Native dialogs for stopping a running Riot Client, missing Riot Client, DNS and certificate problems, and an unreachable chat server
+- "Deceive is running" notification
+- Tray items: Restart and Launch a Different Game, Open Logs Folder; Quit now asks for confirmation and stops the Riot Client
+- Log file (`deceive.log`, previous run kept as `deceive.old.log`)
+- Single-instance protection
+- New app icon from Shaco's splash art and a jester-hat menu bar icon that follows the light/dark menu bar
+
+### Changed
+
+- Menu bar only on macOS (no Dock icon)
+- Native tray from Electrobun replaces systray2 and its helper binaries
+
+### Bug Fixes
+
+- Detecting a running Riot Client matched unrelated processes (for example `ColorSync` contains `lor`)
+
 ## [1.2.0](https://github.com/Dyn4sty/deceive-node/compare/v1.1.0...v1.2.0) (2026-11-13)
 
 ### Added

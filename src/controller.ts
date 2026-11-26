@@ -12,7 +12,6 @@ import { ProxiedConnection } from './proxy/proxied-connection.js';
 import { getCertificate } from './proxy/certificate.js';
 import { logger } from './utils/logger.js';
 import { config, saveLastStatus } from './config/config.js';
-import { createTray, updateTray, destroyTray } from './ui/tray.js';
 
 /**
  * Socket data attached to both incoming and outgoing sockets.
@@ -23,12 +22,17 @@ type SocketData = {
   pendingData?: Buffer[];
 };
 
+export interface ControllerState {
+  status: PresenceStatus;
+  enabled: boolean;
+  connectToMuc: boolean;
+}
+
 export class MainController {
   private status: PresenceStatus;
   private enabled = true;
   private connectToMuc: boolean;
   private connections: ProxiedConnection[] = [];
-  private showTray: boolean;
   private shutdownTimer: ReturnType<typeof setTimeout> | null = null;
   private sentIntroductionText = false;
   private chatServer: TCPSocketListener<SocketData> | null = null;
@@ -36,39 +40,43 @@ export class MainController {
   private chatPort: number = 0;
   private stopped = false;
   private onQuit: () => void = () => process.exit(0);
+  private stateListeners: ((state: ControllerState) => void)[] = [];
+  private chatUnreachableHandler: (() => void) | null = null;
 
-  constructor(initialStatus: PresenceStatus, showTray: boolean) {
+  constructor(initialStatus: PresenceStatus) {
     this.status = initialStatus;
-    this.showTray = showTray;
     this.connectToMuc = config.get('connectToMuc');
     saveLastStatus(initialStatus);
-
-    if (showTray) {
-      void createTray(this.getTrayState(), {
-        onStatusChange: (newStatus) => this.setStatus(newStatus),
-        onToggleEnabled: () => this.toggleEnabled(),
-        onToggleMuc: () => this.toggleConnectToMuc(),
-        onQuit: () => this.quit(),
-      });
-    }
 
     logger.info(`Initial status: ${statusLabel(this.status)}`);
   }
 
   /**
-   * Set the handler used to shut down the whole application (tray Quit, CLI quit, idle shutdown)
+   * Set the handler used to shut down the whole application (tray Quit, idle shutdown)
    */
   setQuitHandler(handler: () => void): void {
     this.onQuit = handler;
   }
 
-  private getTrayState() {
+  getState(): ControllerState {
     return { status: this.status, enabled: this.enabled, connectToMuc: this.connectToMuc };
   }
 
-  private syncTray(): void {
-    if (this.showTray) {
-      updateTray(this.getTrayState());
+  /**
+   * Called whenever the status, enabled flag or lobby chat setting changes
+   */
+  onStateChange(listener: (state: ControllerState) => void): void {
+    this.stateListeners.push(listener);
+  }
+
+  onChatServerUnreachable(handler: () => void): void {
+    this.chatUnreachableHandler = handler;
+  }
+
+  private notifyStateChange(): void {
+    const state = this.getState();
+    for (const listener of this.stateListeners) {
+      listener(state);
     }
   }
 
@@ -183,6 +191,7 @@ export class MainController {
         `Failed to connect to chat server ${this.chatHost}:${this.chatPort}: ${err instanceof Error ? err.message : String(err)}`
       );
       incomingSocket.end();
+      this.chatUnreachableHandler?.();
     });
   }
 
@@ -255,7 +264,7 @@ export class MainController {
     saveLastStatus(newStatus);
     logger.info(`Status changed to: ${statusLabel(newStatus)}`);
 
-    this.syncTray();
+    this.notifyStateChange();
 
     for (const connection of this.connections) {
       connection.updateStatus(newStatus);
@@ -283,7 +292,7 @@ export class MainController {
       connection.updateStatus(status);
     }
 
-    this.syncTray();
+    this.notifyStateChange();
     this.sendMessageFromFakePlayer(
       this.enabled ? 'Deceive is now enabled.' : 'Deceive is now disabled.'
     );
@@ -293,7 +302,7 @@ export class MainController {
     this.connectToMuc = !this.connectToMuc;
     config.set('connectToMuc', this.connectToMuc);
     logger.info(`Lobby chat ${this.connectToMuc ? 'enabled' : 'disabled'}`);
-    this.syncTray();
+    this.notifyStateChange();
   }
 
   describeStatus(): string {
@@ -327,7 +336,7 @@ export class MainController {
 
     await this.delay(200);
     this.sendMessageFromFakePlayer(
-      'To enable or disable Deceive, or to configure other settings, find Deceive in your tray icons, ' +
+      'To enable or disable Deceive, or to configure other settings, find Deceive in your tray (menu bar on macOS), ' +
         'or send me a message: online, offline, mobile, enable, disable, status.'
     );
 
@@ -378,10 +387,6 @@ export class MainController {
     if (this.chatServer) {
       this.chatServer.stop(true);
       this.chatServer = null;
-    }
-
-    if (this.showTray) {
-      destroyTray();
     }
   }
 

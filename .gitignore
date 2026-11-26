@@ -3,6 +3,11 @@ node_modules/
 
 # Build output
 dist/
+build/
+artifacts/
+.hutch/
+.cottontail-tmp/
+*.tsbuildinfo
 
 # IDE
 .idea/

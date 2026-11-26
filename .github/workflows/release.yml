@@ -11,21 +11,21 @@ permissions:
 
 jobs:
   build-and-release:
-    name: Build & Release (${{ matrix.os }})
+    name: Build & Release (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: windows-latest
-            script: package:win
-            artifact: deceive-node-win.exe
-          - os: macos-latest
-            script: package:mac
-            artifact: deceive-node-macos
-          - os: ubuntu-latest
-            script: package:linux
-            artifact: deceive-node-linux
+          # Hutch only builds for the host platform and architecture
+          - name: macOS (Apple Silicon)
+            os: macos-latest
+          - name: macOS (Intel)
+            os: macos-15-intel
+          - name: Windows
+            os: windows-latest
+          - name: Linux
+            os: ubuntu-latest
 
     steps:
       - name: Checkout
@@ -36,23 +36,33 @@ jobs:
         with:
           bun-version: latest
 
+      - name: Install Hutch (macOS/Linux)
+        if: runner.os != 'Windows'
+        run: |
+          curl -fsSL https://hutch.blackboard.sh/hutch/install.sh | sh
+          echo "$HOME/.hutch/bin" >> "$GITHUB_PATH"
+
+      - name: Install Hutch (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          & ([scriptblock]::Create((irm https://hutch.blackboard.sh/hutch/install.ps1)))
+          "$env:USERPROFILE\.hutch\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+
       - name: Install dependencies
-        run: bun install --frozen-lockfile
+        run: hutch run install
 
-      - name: Build executable
-        run: bun run ${{ matrix.script }}
+      - name: Build app
+        run: hutch electrobun build --env=stable
 
-      - name: Sign Windows executable
-        if: matrix.os == 'windows-latest' && env.PFX_BASE64 != ''
-        env:
-          PFX_BASE64: ${{ secrets.CODE_SIGNING_CERT_BASE64 }}
-          PFX_PASSWORD: ${{ secrets.CODE_SIGNING_CERT_PASSWORD }}
-        run: bun run sign:win
-
-      - name: Upload Release Asset
+      - name: Upload Release Assets
         uses: softprops/action-gh-release@v2
         with:
-          files: ./dist/${{ matrix.artifact }}
+          files: |
+            artifacts/*.dmg
+            artifacts/*-Setup.zip
+            artifacts/*-Setup.tar.gz
+          fail_on_unmatched_files: false
           draft: false
           prerelease: false
         env:

@@ -64,7 +64,7 @@ Yes! The game client always shows you as online to yourself - this is normal. Yo
 
 You can change your status by:
 
-1. **CLI flags**: `league-deceiver launch lol --status mobile`
+1. **Tray menu**: Click the Deceive icon in the menu bar (macOS) or system tray and pick Online, Offline or Mobile
 2. **In-game messages**: Send messages to "Deceive Active!" friend:
    - `offline` - Appear offline
    - `mobile` - Appear on mobile
@@ -97,7 +97,7 @@ This friend should appear shortly after connecting. If it doesn't:
 
 1. Check that League Deceiver is still running
 2. Try restarting both League Deceiver and the game
-3. Check the console output for errors
+3. Check `deceive.log` for errors (tray menu > Open Logs Folder)
 
 ### My friends can still see me online
 
@@ -111,7 +111,7 @@ Make sure:
 
 1. Check that the Riot Client path is correct
 2. Try running League Deceiver as administrator
-3. Check for error messages in the console
+3. Check `deceive.log` for errors (tray menu > Open Logs Folder)
 
 ## Platform-Specific
 
@@ -121,7 +121,7 @@ League Deceiver should work out of the box on Windows 10/11.
 
 ### macOS
 
-You may need to allow the application in System Preferences > Security & Privacy.
+macOS 14 or later is required. You may need to allow the application in System Settings > Privacy & Security. Deceive has no Dock icon; look for the jester hat in the menu bar.
 
 ### Linux
 
@@ -134,8 +134,7 @@ Linux support is limited. You'll need:
 
 ### How do I update League Deceiver?
 
-- **Binary release**: Download the latest version from [Releases](https://github.com/username/league-deceiver/releases)
-- **npm**: Run `npm update -g league-deceiver` (if installed via npm)
+- **Release**: Download the latest installer from [Releases](https://github.com/Dyn4sty/deceive-node/releases)
 - **Source**: Pull the latest changes (`git pull`) and rebuild (`bun install && bun run build`)
 
 ### Will my settings be preserved after updates?

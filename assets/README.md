@@ -1,31 +1,21 @@
 # Assets
 
-This directory contains assets used by League Deceiver.
+## App icon
 
-## Icons
+- `app.iconset/` - macOS app icon (all sizes)
+- `icons/app.png` - 512px app icon used for Windows, Linux and the README
 
-System tray icons for different presence statuses:
-- `icons/offline.ico` - Offline status icon
-- `icons/online.ico` - Online status icon  
-- `icons/mobile.ico` - Mobile status icon
+The artwork is cropped from Shaco's default splash art (League of Legends, © Riot Games), served by Riot's [Data Dragon](https://developer.riotgames.com/docs/lol#data-dragon). Shaco's "Deceive" ability is where the original Deceive got its name and icon.
 
-Note: These are currently copies of `deceive.ico`. You can replace them with custom status-specific icons.
+## Tray icons
 
-## Game Logos
+Shaco's jester hat and mask:
 
-Game logos used in the UI:
-- `games/lol.png` - League of Legends logo
-- `games/valorant.png` - VALORANT logo
-- `games/lor.png` - Legends of Runeterra logo
-- `games/2xko.png` - 2XKO logo (optional)
+- `icons/tray-template.png` - macOS menu bar template image (36px at 144 DPI, rendered as 18pt and tinted by the system). It has no status badge because Electrobun can't swap template images.
+- `icons/tray-<status>.png` - Windows/Linux tray icons: white silhouette with a status badge (green dot = online, grey ring = offline, blue phone = mobile)
 
-## Logo
+## Game logos
 
-- `logo.ico` - League Deceiver logo (currently using Deceive icon)
-- `deceive.ico` - Original Deceive icon
+Buttons in the game picker window: `games/lol.png`, `games/tft.png`, `games/valorant.png`, `games/lor.png`, `games/lion.png`, `games/riot_client.png`. These come from the original [Deceive](https://github.com/molenzwiebel/Deceive) game prompt.
 
-## Source
-
-Original icons and assets are available in the [Deceive repository](https://github.com/molenzwiebel/Deceive) under `Deceive/Resources/`.
-
-You can reference the original Deceive repository as a git submodule to access the original assets.
+League Deceiver isn't endorsed by Riot Games and doesn't reflect the views or opinions of Riot Games or anyone officially involved in producing or managing Riot Games properties. Riot Games and all associated properties are trademarks or registered trademarks of Riot Games, Inc.

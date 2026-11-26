@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Deceive</title>
+    <link rel="stylesheet" href="views://picker/index.css" />
+    <script type="module" src="views://picker/index.js"></script>
+  </head>
+  <body>
+    <main>
+      <h1>Which game would you like to launch?</h1>
+      <div class="games">
+        <button data-game="lol" title="League of Legends">
+          <img src="views://games/lol.png" alt="League of Legends" />
+        </button>
+        <button data-game="tft" title="Teamfight Tactics">
+          <img src="views://games/tft.png" alt="Teamfight Tactics" />
+        </button>
+        <button data-game="valorant" title="VALORANT">
+          <img src="views://games/valorant.png" alt="VALORANT" />
+        </button>
+        <button data-game="lor" title="Legends of Runeterra">
+          <img src="views://games/lor.png" alt="Legends of Runeterra" />
+        </button>
+        <button data-game="lion" title="2XKO">
+          <img src="views://games/lion.png" alt="2XKO" />
+        </button>
+        <button data-game="riot-client" title="Riot Client only">
+          <img src="views://games/riot_client.png" alt="Riot Client" />
+        </button>
+      </div>
+      <label class="remember">
+        <input type="checkbox" id="remember" />
+        Remember my choice
+      </label>
+      <p class="hint">You can launch a different game later from the Deceive menu.</p>
+    </main>
+  </body>
+</html>

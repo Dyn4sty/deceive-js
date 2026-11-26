@@ -4,20 +4,31 @@
 
 import { execSync, spawnSync } from 'child_process';
 import { existsSync, readFileSync } from 'fs';
-import { join } from 'path';
+import { basename, join } from 'path';
 import { isWindows, isMacOS } from '../utils/platform.js';
 import { logger } from '../utils/logger.js';
 
 const PROCESS_NAMES = ['RiotClientServices', 'LeagueClient', 'LoR', 'VALORANT-Win64-Shipping'];
 
 /**
+ * Executable name without directory or .exe, lowercased, for exact comparison
+ */
+export function processBaseName(processPath: string): string {
+  return basename(processPath.trim().replace(/\\/g, '/'))
+    .replace(/\.exe$/i, '')
+    .toLowerCase();
+}
+
+function isRunning(names: string[]): boolean {
+  const wanted = new Set(names.map((name) => name.toLowerCase()));
+  return getRunningProcesses().some((p) => wanted.has(processBaseName(p)));
+}
+
+/**
  * Check if any Riot client processes are running
  */
 export function isClientRunning(): boolean {
-  const processes = getRunningProcesses();
-  return PROCESS_NAMES.some((name) =>
-    processes.some((p) => p.toLowerCase().includes(name.toLowerCase()))
-  );
+  return isRunning(PROCESS_NAMES);
 }
 
 /**
@@ -131,8 +142,7 @@ function getLinuxRiotClientPath(): string | null {
  * Get the currently running Riot Client process
  */
 export function getRiotClientProcess(): string | null {
-  const processes = getRunningProcesses();
-  return processes.find((p) => p.toLowerCase().includes('riotclientservices')) ?? null;
+  return getRunningProcesses().find((p) => processBaseName(p) === 'riotclientservices') ?? null;
 }
 
 /**

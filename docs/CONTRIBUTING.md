@@ -44,6 +44,7 @@ Enhancement suggestions are tracked as GitHub issues. When creating an enhanceme
 ### Prerequisites
 
 - [Bun](https://bun.sh) (latest version)
+- [Hutch](https://docs.electrobun.dev/electrobun/guides/hutch/): `curl -fsSL https://hutch.blackboard.sh/hutch/install.sh | sh`
 
 ### Getting Started
 
@@ -55,7 +56,10 @@ cd deceive-node
 # Install dependencies
 bun install
 
-# Run in development mode
+# Generate the Electrobun devkit (provides the electrobun/* types for typecheck and lint)
+bun run prepare:devkit
+
+# Run the app in development mode (rebuilds on change)
 bun run dev
 
 # Run tests
@@ -72,16 +76,20 @@ bun run build
 
 ```
 src/
-├── index.ts              # Entry point
+├── bun/index.ts          # Electrobun main process
 ├── startup.ts            # Startup orchestration
 ├── controller.ts         # Main controller
 ├── types.ts              # TypeScript types
 ├── proxy/                # Proxy implementations
 ├── launcher/             # Game launcher
-├── ui/                   # User interfaces
+├── ui/                   # Tray, dialogs, game picker window
+├── views/                # Game picker web view
+├── shared/               # RPC schema shared with the view
 ├── config/               # Configuration
 └── utils/                # Utilities
 ```
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) for details.
 
 ## Style Guide
 
