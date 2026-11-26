@@ -31,9 +31,9 @@ const ICONS: Record<PresenceStatus, string> = {
 };
 
 const STATUS_ITEMS: [PresenceStatus, string][] = [
-  [PresenceStatus.Online, 'Online'],
-  [PresenceStatus.Offline, 'Offline'],
-  [PresenceStatus.Mobile, 'Mobile'],
+  [PresenceStatus.Online, '🟢 Online'],
+  [PresenceStatus.Offline, '⚪ Offline'],
+  [PresenceStatus.Mobile, '📱 Mobile'],
 ];
 
 const STARTUP_ITEMS: [StartupStatus, string][] = [...STATUS_ITEMS, ['last', 'Remember Last']];
