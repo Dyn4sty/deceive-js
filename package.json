@@ -1,6 +1,6 @@
 {
   "name": "deceive-js",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "Appear offline in League of Legends, TFT, VALORANT, and Legends of Runeterra. A Bun + Electrobun port of Deceive.",
   "type": "module",
   "private": true,
