@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.0](https://github.com/Dyn4sty/deceive-js/compare/v2.1.1...v2.2.0) (2026-11-27)
+
+
+### Features
+
+* single-file Windows installer, exe details and app metadata ([29d7d97](https://github.com/Dyn4sty/deceive-js/commit/29d7d97c791ee217bad32d822fc3138b611d857f))
+
+
+### Bug Fixes
+
+* **windows:** add setup exe details after Electrobun creates it ([52ab8b8](https://github.com/Dyn4sty/deceive-js/commit/52ab8b8683101735c57b4d59a742e81fee9f5196))
+
 ## [2.1.1](https://github.com/Dyn4sty/deceive-js/compare/v2.1.0...v2.1.1) (2026-11-26)
 
 
