@@ -66,10 +66,24 @@ jobs:
         run: bun run test
 
   build:
-    name: Build (macOS canary)
-    runs-on: macos-latest
+    name: Build (${{ matrix.name }} canary)
+    runs-on: ${{ matrix.os }}
     needs: [lint, test]
     if: ${{ !startsWith(github.head_ref, 'release-please') }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS
+            os: macos-latest
+            artifact: deceive-canary-macos-arm64
+            files: artifacts/*.dmg
+          - name: Windows
+            os: windows-latest
+            artifact: deceive-canary-win-x64
+            files: |
+              artifacts/*-Setup*.exe
+              artifacts/*-Setup*.zip
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -79,10 +93,18 @@ jobs:
         with:
           bun-version: latest
 
-      - name: Install Hutch
+      - name: Install Hutch (macOS)
+        if: runner.os != 'Windows'
         run: |
           curl -fsSL https://hutch.blackboard.sh/hutch/install.sh | sh
           echo "$HOME/.hutch/bin" >> "$GITHUB_PATH"
+
+      - name: Install Hutch (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          & ([scriptblock]::Create((irm https://hutch.blackboard.sh/hutch/install.ps1)))
+          "$env:USERPROFILE\.hutch\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
@@ -90,9 +112,22 @@ jobs:
       - name: Build app
         run: hutch electrobun build --env=canary
 
+      - name: Install NSIS (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if (-not (Get-Command makensis -ErrorAction SilentlyContinue) -and -not (Test-Path 'C:\Program Files (x86)\NSIS\makensis.exe')) {
+            choco install nsis -y --no-progress
+          }
+
+      # Also fails if any Windows executable is missing its version info
+      - name: Build single-file installer and check exe details (Windows)
+        if: runner.os == 'Windows'
+        run: bun scripts/package-windows.ts
+
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: deceive-canary-macos-arm64
-          path: artifacts/*.dmg
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.files }}
           retention-days: 7

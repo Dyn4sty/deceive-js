@@ -13,7 +13,8 @@ The artwork is cropped from Shaco's default splash art (League of Legends, © Ri
 Shaco's jester hat and mask:
 
 - `icons/tray-template.png` - macOS menu bar template image (36px at 144 DPI, rendered as 18pt and tinted by the system). It has no status badge because Electrobun can't swap template images.
-- `icons/tray-<status>.png` - Windows/Linux tray icons: white silhouette with a status badge (green dot = online, grey ring = offline, blue phone = mobile)
+- `icons/tray-<status>.ico` - Windows tray icons (16-48px; the Windows tray only loads `.ico`): white silhouette with a dark outline and a status badge (green dot = online, grey ring = offline, blue phone = mobile)
+- `icons/tray-<status>.png` - the same icons as PNG, for Linux
 
 ## Game logos
 

@@ -21,13 +21,15 @@ export interface TrayCallbacks {
 
 // macOS uses one monochrome template image (36px at 144 DPI = 18pt) that the system tints for the
 // menu bar. It is never swapped: Electrobun's setTrayImage drops the template flag, which would turn
-// the icon black. Windows and Linux show the status with a colored badge instead.
+// the icon black. Windows and Linux show the status with a colored badge instead; the Windows tray
+// loads images with LoadImage(IMAGE_ICON), which only reads .ico files.
 const isMac = process.platform === 'darwin';
 const MAC_ICON = 'views://icons/tray-template.png';
+const iconExt = process.platform === 'win32' ? 'ico' : 'png';
 const ICONS: Record<PresenceStatus, string> = {
-  [PresenceStatus.Offline]: 'views://icons/tray-offline.png',
-  [PresenceStatus.Online]: 'views://icons/tray-online.png',
-  [PresenceStatus.Mobile]: 'views://icons/tray-mobile.png',
+  [PresenceStatus.Offline]: `views://icons/tray-offline.${iconExt}`,
+  [PresenceStatus.Online]: `views://icons/tray-online.${iconExt}`,
+  [PresenceStatus.Mobile]: `views://icons/tray-mobile.${iconExt}`,
 };
 
 const STATUS_ITEMS: [PresenceStatus, string][] = [

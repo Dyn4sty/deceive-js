@@ -55,8 +55,10 @@
 2. Download the installer for your system:
    - **macOS (Apple Silicon)**: `macos-arm64-Deceive.dmg`
    - **macOS (Intel)**: `macos-x64-Deceive.dmg`
-   - **Windows**: `win-x64-Deceive-Setup.zip`
+   - **Windows**: `win-x64-Deceive-Setup.exe` (or `win-x64-Deceive-Setup.zip`: extract it and run `Deceive-Setup.exe`)
 3. Install and open **Deceive**
+
+On Windows, Deceive installs for your user only (no administrator rights needed) and appears in **Settings > Apps > Installed apps**, where you can uninstall it.
 
 macOS 14 or later is required.
 

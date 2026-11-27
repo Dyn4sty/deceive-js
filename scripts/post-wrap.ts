@@ -1,25 +1,42 @@
 /**
- * Electrobun postWrap hook: give the macOS release wrapper a valid ad-hoc signature.
+ * Electrobun postWrap hook: finish the release wrapper before it is packaged.
  *
- * Without a Developer ID, the wrapper only carries the linker's partial ad-hoc signature, which
- * macOS reports as "damaged" for downloaded apps. A complete ad-hoc signature turns that into
- * the normal "Apple could not verify" prompt, which users can allow in Privacy & Security.
+ * - macOS: add app details to Info.plist, then give the wrapper a complete ad-hoc signature.
+ *   Without a Developer ID it only carries the linker's partial ad-hoc signature, which macOS
+ *   reports as "damaged" for downloaded apps; a complete one turns that into the normal
+ *   "Apple could not verify" prompt, which users can allow in Privacy & Security.
+ * - Windows: version info and icon on Deceive-Setup.exe
  */
 
 import { spawnSync } from 'child_process';
+import { appVersion, applyMacAppDetails, findAppBundles, findFiles } from './hook-utils.ts';
+import { applyWindowsDetails } from './windows-version-info.ts';
 
-if (process.env.ELECTROBUN_OS !== 'macos') process.exit(0);
+const wrapper = process.env.ELECTROBUN_WRAPPER_BUNDLE_PATH;
 
-const app = process.env.ELECTROBUN_WRAPPER_BUNDLE_PATH;
-if (!app) throw new Error('ELECTROBUN_WRAPPER_BUNDLE_PATH is not set');
+if (process.env.ELECTROBUN_OS === 'macos') {
+  if (!wrapper) throw new Error('ELECTROBUN_WRAPPER_BUNDLE_PATH is not set');
 
-function run(args: string[]): void {
-  const result = spawnSync('codesign', args, { stdio: 'inherit' });
-  if (result.status !== 0) {
-    throw new Error(`codesign ${args.join(' ')} failed with exit code ${result.status}`);
-  }
+  for (const app of findAppBundles(wrapper)) applyMacAppDetails(app);
+
+  const codesign = (args: string[]) => {
+    const result = spawnSync('codesign', args, { stdio: 'inherit' });
+    if (result.status !== 0) {
+      throw new Error(`codesign ${args.join(' ')} failed with exit code ${result.status}`);
+    }
+  };
+  codesign(['--force', '--deep', '--sign', '-', wrapper]);
+  codesign(['--verify', '--deep', '--strict', '--verbose=2', wrapper]);
+  console.log(`Ad-hoc signed ${wrapper}`);
 }
 
-run(['--force', '--deep', '--sign', '-', app]);
-run(['--verify', '--deep', '--strict', '--verbose=2', app]);
-console.log(`Ad-hoc signed ${app}`);
+if (process.env.ELECTROBUN_OS === 'win') {
+  const isSetup = (name: string) => /-setup.*\.exe$/i.test(name);
+  let setups = findFiles(wrapper, isSetup);
+  if (setups.length === 0) setups = findFiles(process.env.ELECTROBUN_BUILD_DIR, isSetup);
+  if (setups.length === 0) console.warn(`postWrap: no *-Setup.exe found under ${wrapper}`);
+  for (const exe of setups) {
+    applyWindowsDetails(exe, { description: 'Deceive Setup', version: appVersion });
+    console.log(`postWrap: added version info to ${exe}`);
+  }
+}

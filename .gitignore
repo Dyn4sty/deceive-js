@@ -5,6 +5,7 @@ node_modules/
 dist/
 build/
 build-generated/
+installer/windows/*.exe
 artifacts/
 .hutch/
 .cottontail-tmp/
