@@ -1,16 +1,17 @@
 /**
- * Electrobun postWrap hook: finish the release wrapper before it is packaged.
+ * Electrobun postWrap hook (macOS): add app details to the release wrapper's Info.plist, then give
+ * it a complete ad-hoc signature.
  *
- * - macOS: add app details to Info.plist, then give the wrapper a complete ad-hoc signature.
- *   Without a Developer ID it only carries the linker's partial ad-hoc signature, which macOS
- *   reports as "damaged" for downloaded apps; a complete one turns that into the normal
- *   "Apple could not verify" prompt, which users can allow in Privacy & Security.
- * - Windows: version info and icon on Deceive-Setup.exe
+ * Without a Developer ID the wrapper only carries the linker's partial ad-hoc signature, which
+ * macOS reports as "damaged" for downloaded apps; a complete one turns that into the normal
+ * "Apple could not verify" prompt, which users can allow in Privacy & Security.
+ *
+ * On Windows, Electrobun creates the setup executable after this hook runs, so its details are
+ * added by scripts/package-windows.ts instead.
  */
 
 import { spawnSync } from 'child_process';
-import { appVersion, applyMacAppDetails, findAppBundles, findFiles } from './hook-utils.ts';
-import { applyWindowsDetails } from './windows-version-info.ts';
+import { applyMacAppDetails, findAppBundles } from './hook-utils.ts';
 
 const wrapper = process.env.ELECTROBUN_WRAPPER_BUNDLE_PATH;
 
@@ -28,15 +29,4 @@ if (process.env.ELECTROBUN_OS === 'macos') {
   codesign(['--force', '--deep', '--sign', '-', wrapper]);
   codesign(['--verify', '--deep', '--strict', '--verbose=2', wrapper]);
   console.log(`Ad-hoc signed ${wrapper}`);
-}
-
-if (process.env.ELECTROBUN_OS === 'win') {
-  const isSetup = (name: string) => /-setup.*\.exe$/i.test(name);
-  let setups = findFiles(wrapper, isSetup);
-  if (setups.length === 0) setups = findFiles(process.env.ELECTROBUN_BUILD_DIR, isSetup);
-  if (setups.length === 0) console.warn(`postWrap: no *-Setup.exe found under ${wrapper}`);
-  for (const exe of setups) {
-    applyWindowsDetails(exe, { description: 'Deceive Setup', version: appVersion });
-    console.log(`postWrap: added version info to ${exe}`);
-  }
 }

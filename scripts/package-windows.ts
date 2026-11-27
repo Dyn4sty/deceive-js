@@ -10,11 +10,12 @@ import { spawnSync } from 'child_process';
 import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'fs';
 import { basename, join } from 'path';
 import packageJson from '../package.json' with { type: 'json' };
-import { COPYRIGHT, readWindowsDetails } from './windows-version-info.ts';
+import { applyWindowsDetails, COPYRIGHT, readWindowsDetails } from './windows-version-info.ts';
 
 const root = join(import.meta.dir, '..');
 const artifacts = join(root, 'artifacts');
 const staging = join(root, 'build-generated', 'windows-setup');
+const checkDir = join(root, 'build-generated', 'windows-check');
 const version = packageJson.version;
 
 function fail(message: string): never {
@@ -55,13 +56,24 @@ const exePath = join(artifacts, zipName.replace(/\.zip$/i, '.exe'));
 rmSync(staging, { recursive: true, force: true });
 mkdirSync(staging, { recursive: true });
 run(tar, ['-xf', zipPath, '-C', staging]);
-if (!existsSync(join(staging, 'Deceive-Setup.exe'))) fail('Deceive-Setup.exe missing from the zip');
+
+// Deceive-Setup.exe (stable) or Deceive-Setup-canary.exe (canary)
+const setupName = readdirSync(staging).find((name) => /setup.*\.exe$/i.test(name));
+if (!setupName) fail('no setup executable in the zip');
+const setupPath = join(staging, setupName);
+
+// Electrobun creates the setup executable after the postWrap hook, so its details are added here
+applyWindowsDetails(setupPath, { description: 'Deceive Setup', version });
+rmSync(zipPath);
+run(tar, ['-a', '-c', '-f', zipPath, '-C', staging, setupName, '.installer']);
+console.log(`Added version info to ${setupName} and rebuilt ${zipName}`);
 
 const [major = 0, minor = 0, patch = 0] = version
   .split(/[.+-]/)
   .map((n) => Number.parseInt(n, 10) || 0);
 run(findMakensis(), [
   `/DSOURCE=${staging}`,
+  `/DSETUPEXE=${setupName}`,
   `/DOUTFILE=${exePath}`,
   `/DICON=${join(root, 'assets', 'icons', 'app.ico')}`,
   `/DVERSION=${version}`,
@@ -79,13 +91,14 @@ const payload = existsSync(payloadDir)
   : undefined;
 const exes: [string, string][] = [
   ['installer', exePath],
-  ['Electrobun setup', join(staging, 'Deceive-Setup.exe')],
+  ['Electrobun setup', setupPath],
 ];
 if (payload) {
-  const tarPath = join(staging, 'payload.tar');
-  const extracted = join(staging, 'payload');
-  writeFileSync(tarPath, Bun.zstdDecompressSync(await Bun.file(join(payloadDir, payload)).bytes()));
+  rmSync(checkDir, { recursive: true, force: true });
+  const extracted = join(checkDir, 'payload');
+  const tarPath = join(checkDir, 'payload.tar');
   mkdirSync(extracted, { recursive: true });
+  writeFileSync(tarPath, Bun.zstdDecompressSync(await Bun.file(join(payloadDir, payload)).bytes()));
   run(tar, ['-xf', tarPath, '-C', extracted]);
   const launcher = readdirSync(extracted, { recursive: true }).find((entry) =>
     String(entry).toLowerCase().endsWith('launcher.exe')

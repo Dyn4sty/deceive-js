@@ -6,6 +6,7 @@
 ;
 ; Built by scripts/package-windows.ts, which passes:
 ;   SOURCE      extracted Electrobun setup folder
+;   SETUPEXE    name of Electrobun's setup exe in SOURCE (Deceive-Setup.exe, or -canary for canary)
 ;   OUTFILE     output exe path
 ;   ICON        app icon (.ico)
 ;   VERSION     app version (2.1.1)
@@ -20,6 +21,7 @@ Unicode true
   !endif
 !macroend
 !insertmacro RequireDefine SOURCE
+!insertmacro RequireDefine SETUPEXE
 !insertmacro RequireDefine OUTFILE
 !insertmacro RequireDefine ICON
 !insertmacro RequireDefine VERSION
@@ -47,7 +49,7 @@ Section
   SetOutPath "$PLUGINSDIR\setup"
   File /r "${SOURCE}\*.*"
 
-  ExecWait '"$PLUGINSDIR\setup\Deceive-Setup.exe"' $0
+  ExecWait '"$PLUGINSDIR\setup\${SETUPEXE}"' $0
 
   ; Leave the temporary folder so NSIS can delete it on exit
   SetOutPath "$TEMP"
